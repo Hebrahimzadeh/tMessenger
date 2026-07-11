@@ -1,3 +1,5 @@
+import { ChatsList } from '@/components/chat/ChatsList';
+
 export default function ChatsPage() {
-  return <div className="p-4">لیست گفتگوها — در حال ساخت</div>;
+  return <ChatsList />;
 }
