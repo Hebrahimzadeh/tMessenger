@@ -1,5 +1,7 @@
-.idea
 node_modules
+.next
+.env*.local
+.idea
 dist
 Standalone_Mobile
 .env
