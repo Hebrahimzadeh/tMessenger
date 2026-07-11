@@ -1,9 +1,35 @@
+import type { Metadata } from 'next';
 import './globals.css';
+import { ChatsProvider } from '@/hooks/useChats';
+import { PlatformsProvider } from '@/hooks/usePlatforms';
+import { UIProvider } from '@/hooks/useUI';
+import { AiCopilotProvider } from '@/hooks/useAiCopilot';
+import { PhoneFrame } from '@/components/layout/PhoneFrame';
+import { AiModal } from '@/components/modals/AiModal';
+import { PublishToast } from '@/components/modals/PublishToast';
+
+export const metadata: Metadata = {
+  title: 'تعاون',
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="fa" dir="rtl">
-      <body>{children}</body>
+      <body>
+        <ChatsProvider>
+          <PlatformsProvider>
+            <UIProvider>
+              <AiCopilotProvider>
+                <PhoneFrame>
+                  {children}
+                  <AiModal />
+                  <PublishToast />
+                </PhoneFrame>
+              </AiCopilotProvider>
+            </UIProvider>
+          </PlatformsProvider>
+        </ChatsProvider>
+      </body>
     </html>
   );
 }
