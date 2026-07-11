@@ -4,7 +4,7 @@ import { ChatsProvider } from '@/hooks/useChats';
 import { PlatformsProvider } from '@/hooks/usePlatforms';
 import { UIProvider } from '@/hooks/useUI';
 import { AiCopilotProvider } from '@/hooks/useAiCopilot';
-import { PhoneFrame } from '@/components/layout/PhoneFrame';
+import { AppShell } from '@/components/layout/AppShell';
 import { AiModal } from '@/components/modals/AiModal';
 import { PublishToast } from '@/components/modals/PublishToast';
 
@@ -20,11 +20,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <PlatformsProvider>
             <UIProvider>
               <AiCopilotProvider>
-                <PhoneFrame>
+                <AppShell>
                   {children}
                   <AiModal />
                   <PublishToast />
-                </PhoneFrame>
+                </AppShell>
               </AiCopilotProvider>
             </UIProvider>
           </PlatformsProvider>
