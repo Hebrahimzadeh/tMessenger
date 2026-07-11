@@ -5,3 +5,4 @@ node_modules
 dist
 Standalone_Mobile
 .env
+*.tsbuildinfo
