@@ -21,6 +21,7 @@ export function CreateCardSheet({ isOpen, platform, onClose }: { isOpen: boolean
   useEffect(() => {
     if (!isOpen) return;
     const draft = getDraft(platform.id);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing form state to the sheet's open/platform transition; CreateCardSheet is rewritten in Task 17.
     setForm(draft ? { title: draft.title, desc: draft.desc, hasImage: draft.hasImage } : EMPTY_FORM);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, platform.id]);

@@ -19,7 +19,7 @@ export function PlatformInternal({ platform }: { platform: Platform }) {
   const { joinedPlatforms, joinPlatform, publishPlatform, saveDraft } = usePlatforms();
   const { triggerPublishToast } = useUI();
 
-  const [platformInnerTab, setPlatformInnerTab] = useState<'explore' | 'me'>('explore');
+  const [platformInnerTab] = useState<'explore' | 'me'>('explore');
   const [exploreSearchQuery, setExploreSearchQuery] = useState('');
   const [meSubTab, setMeSubTab] = useState<'myCards' | 'myCoops'>('myCards');
   const [showPlatformBio, setShowPlatformBio] = useState(false);
@@ -32,6 +32,7 @@ export function PlatformInternal({ platform }: { platform: Platform }) {
 
   useEffect(() => {
     const cardParam = searchParams.get('card');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing initial UI state from the URL on mount for deep-linking.
     if (cardParam) setActiveCardId(Number(cardParam));
     if (searchParams.get('draft') === '1') setShowNewCardSheet(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
