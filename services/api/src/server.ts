@@ -5,11 +5,13 @@ import { buildApp } from './app';
 import databasePlugin from './plugins/database';
 import redisPlugin from './plugins/redis';
 import { S3StorageProvider } from './modules/storage/s3-storage-provider';
+import { createSmsProvider } from './modules/auth/sms-provider';
 
 async function main() {
   // Fails fast (before any plugin registration or listen) on missing env or,
   // in production, a default/short secret.
   const env = getEnv();
+  const isProduction = env.NODE_ENV === 'production';
 
   const storage = new S3StorageProvider({
     endpoint: env.S3_ENDPOINT,
@@ -18,6 +20,10 @@ async function main() {
     secretAccessKey: env.S3_SECRET_KEY,
   });
 
+  // Fails fast in production without a real provider configured (Task 06
+  // acceptance: "production بدون provider معتبر start نشود").
+  const smsProvider = createSmsProvider(env);
+
   // `app` is referenced inside checkRedis's closure before this statement
   // finishes - safe, because the closure body only runs later (on an actual
   // /v1/health/ready request), well after `app` and the redis plugin below
@@ -25,7 +31,13 @@ async function main() {
   // checkDatabase and the database plugin share the exact same client
   // without needing that same forward-reference.
   const app = buildApp({
-    legal: { appOrigin: env.APP_ORIGIN },
+    appOrigin: env.APP_ORIGIN,
+    auth: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+      phoneEncryptionKey: env.PHONE_ENCRYPTION_KEY,
+      smsProvider,
+      isProduction,
+    },
     health: {
       checkDatabase: async () => {
         await getPrisma().$queryRaw`SELECT 1`;

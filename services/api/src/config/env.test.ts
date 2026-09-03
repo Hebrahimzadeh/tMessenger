@@ -107,4 +107,14 @@ describe('parseEnv', () => {
     const env = parseEnv({ ...validEnv, BOOTSTRAP_SUPERADMIN_PHONE: '+989191953219' });
     expect(env.BOOTSTRAP_SUPERADMIN_PHONE).toBe('+989191953219');
   });
+
+  it('parses fine without SMS_PROVIDER_WEBHOOK_URL/SMS_PROVIDER_API_KEY - createSmsProvider enforces production requirements, not env.ts', () => {
+    const env = parseEnv(validEnv);
+    expect(env.SMS_PROVIDER_WEBHOOK_URL).toBeUndefined();
+    expect(env.SMS_PROVIDER_API_KEY).toBeUndefined();
+  });
+
+  it('rejects a non-URL SMS_PROVIDER_WEBHOOK_URL', () => {
+    expect(() => parseEnv({ ...validEnv, SMS_PROVIDER_WEBHOOK_URL: 'not-a-url' })).toThrow();
+  });
 });

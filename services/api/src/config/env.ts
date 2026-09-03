@@ -36,6 +36,11 @@ const baseSchema = z.object({
   // acceptance requires the bootstrap phone number come from here and only
   // here - never hardcoded in source (see bootstrap.ts).
   BOOTSTRAP_SUPERADMIN_PHONE: z.string().optional(),
+  // Optional here too: shape validation only. createSmsProvider (Task 06)
+  // is what actually enforces "production must not start without a valid
+  // provider" - see sms-provider.ts's SmsProviderNotConfiguredError.
+  SMS_PROVIDER_WEBHOOK_URL: z.string().url().optional(),
+  SMS_PROVIDER_API_KEY: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof baseSchema>;
