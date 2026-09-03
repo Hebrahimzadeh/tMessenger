@@ -15,6 +15,7 @@ type CheckName = keyof HealthReadyResponse['checks'];
 const CHECK_LABELS: Record<CheckName, string> = {
   database: 'پایگاه‌داده',
   redis: 'صف/کش (Redis)',
+  storage: 'ذخیره‌سازی فایل',
 };
 
 const CHECK_STATUS_LABELS: Record<HealthReadyResponse['checks'][CheckName], string> = {

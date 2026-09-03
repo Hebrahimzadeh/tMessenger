@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taavon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-taavon_dev_password}
+      POSTGRES_DB: taavon
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U taavon -d taavon']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # S3-compatible object storage for local dev/test. MinIO speaks the S3 API,
+  # so services/api's s3-storage-provider (built against @aws-sdk/client-s3)
+  # works unchanged against either MinIO here or a real S3-compatible service
+  # in production - only S3_ENDPOINT/credentials differ.
+  object-storage:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-taavon_dev_access_key}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-taavon_dev_secret_key}
+    ports:
+      - '${S3_PORT:-9000}:9000'
+      - '${S3_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - object_storage_data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
+  object_storage_data:
