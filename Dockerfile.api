@@ -28,11 +28,13 @@ COPY packages/contracts ./packages/contracts
 COPY packages/database ./packages/database
 COPY services/api ./services/api
 # `prisma generate` only needs the schema, not a live connection, but
-# prisma.config.ts validates DATABASE_URL is *present* at config-load time.
-# This placeholder is never connected to - it's not a secret, just a string
-# shaped like one, and is not the same value the container runs with (that
-# comes from docker-compose.yml's real environment at runtime).
+# prisma.config.ts validates DATABASE_URL/SHADOW_DATABASE_URL are *present*
+# at config-load time. These placeholders are never connected to - they're
+# not secrets, just strings shaped like one, and are not the same values the
+# container runs with (those come from docker-compose.yml's real environment
+# at runtime).
 RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" \
+  SHADOW_DATABASE_URL="postgresql://build:build@localhost:5432/build_shadow" \
   npm run db:generate --workspace packages/database
 RUN chown -R apiuser:nodejs /app
 USER apiuser

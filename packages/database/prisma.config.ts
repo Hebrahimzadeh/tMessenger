@@ -16,5 +16,10 @@ export default defineConfig({
   },
   datasource: {
     url: env('DATABASE_URL'),
+    // Only needed for `prisma migrate dev`/`migrate diff --from-migrations`,
+    // which replay migration history into a scratch database to compute the
+    // "current" state before diffing. Not required for `migrate deploy`
+    // (production/CI) or `--from-empty` diffs.
+    shadowDatabaseUrl: env('SHADOW_DATABASE_URL'),
   },
 });

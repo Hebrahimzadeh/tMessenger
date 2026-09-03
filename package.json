@@ -18,7 +18,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "review:gate": "node scripts/review-gate.mjs"
+    "review:gate": "node scripts/review-gate.mjs",
+    "bootstrap:superadmin": "tsx scripts/bootstrap-superadmin.mjs"
   },
   "dependencies": {
     "@taavon/contracts": "*",
@@ -42,6 +43,7 @@
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/dom": "^10.4.1",
     "jsdom": "^30.0.1",
-    "@playwright/test": "^1.62.1"
+    "@playwright/test": "^1.62.1",
+    "tsx": "^4.23.13"
   }
 }

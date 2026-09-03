@@ -31,6 +31,11 @@ const baseSchema = z.object({
   SESSION_HMAC_KEY: z.string().min(16, 'SESSION_HMAC_KEY must be at least 16 characters'),
   PHONE_ENCRYPTION_KEY: z.string().min(16, 'PHONE_ENCRYPTION_KEY must be at least 16 characters'),
   APP_ORIGIN: z.string().url('APP_ORIGIN must be a valid URL'),
+  // Optional: only scripts/bootstrap-superadmin.mjs reads this, never the
+  // server itself, so it must not block every other boot when unset. Task 05
+  // acceptance requires the bootstrap phone number come from here and only
+  // here - never hardcoded in source (see bootstrap.ts).
+  BOOTSTRAP_SUPERADMIN_PHONE: z.string().optional(),
 });
 
 export type Env = z.infer<typeof baseSchema>;

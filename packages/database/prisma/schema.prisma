@@ -48,3 +48,254 @@ model OutboxEvent {
   @@index([processedAt, availableAt])
   @@map("outbox_events")
 }
+
+// Task 05: identity foundation. New migration, additive only - the
+// SystemSetting/OutboxEvent migration above stays untouched (Global
+// Constraint: "migration اعمال‌شده را rewrite نکن؛ migration جدید بساز").
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model User {
+  id         String     @id @default(uuid()) @db.Uuid
+  status     UserStatus @default(ACTIVE)
+  lastSeenAt DateTime?  @db.Timestamptz(6)
+  createdAt  DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime   @updatedAt @db.Timestamptz(6)
+
+  phoneIdentity          PhoneIdentity?
+  profile                UserProfile?
+  officialIdentityClaim  OfficialIdentityClaim?
+  sessions               Session[]
+  devices                Device[]
+  termsAcceptances       TermsAcceptance[]
+  roleAssignments        RoleAssignment[] @relation("RoleAssignmentUser")
+  roleAssignmentsGranted RoleAssignment[] @relation("RoleAssignmentAssignedBy")
+
+  @@index([status])
+  @@map("users")
+}
+
+/// The only place a phone number's ciphertext/hash live. `plaintext` is
+/// never stored - see phone-crypto.ts. `ON DELETE RESTRICT`: deleting a
+/// user's identity record is a deliberate, audited operation, never an
+/// accidental cascade from deleting something else.
+model PhoneIdentity {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @unique @db.Uuid
+  phoneHash       String    @unique
+  phoneCiphertext String
+  verifiedAt      DateTime? @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("phone_identities")
+}
+
+enum PhoneVisibility {
+  PRIVATE
+  PUBLIC
+}
+
+/// `username` is intentionally NOT marked @unique here: section 12 requires
+/// a case-insensitive unique constraint ("unique lower(username)"), which
+/// Prisma's schema DSL cannot express as a functional index. The migration
+/// adds `CREATE UNIQUE INDEX ... ON user_profiles (lower(username))`
+/// directly; callers must query with Prisma's `mode: 'insensitive'` filter
+/// (Task 08, where username assignment/validation actually lands).
+model UserProfile {
+  id              String          @id @default(uuid()) @db.Uuid
+  userId          String          @unique @db.Uuid
+  username        String
+  displayName     String
+  bio             String?
+  avatarObjectKey String?
+  phoneVisibility PhoneVisibility @default(PRIVATE)
+  createdAt       DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("user_profiles")
+}
+
+enum LegalDocumentType {
+  TERMS
+  PRIVACY
+}
+
+/// Immutable once created - the application never issues an UPDATE against
+/// this table, only INSERT (a new version). See docs' migration rule:
+/// "enum تغییرناپذیر فرض نشود و migration افزودن مقدار جدا باشد."
+model LegalDocumentVersion {
+  id          String            @id @default(uuid()) @db.Uuid
+  type        LegalDocumentType
+  version     Int
+  contentHash String
+  publicUrl   String
+  effectiveAt DateTime          @db.Timestamptz(6)
+  createdAt   DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime          @updatedAt @db.Timestamptz(6)
+
+  termsAcceptances TermsAcceptance[]
+
+  @@unique([type, version])
+  @@map("legal_document_versions")
+}
+
+/// Append-only: a user's acceptance of one specific document version, tied
+/// to the OTP challenge that produced it (Task 06 wires otpChallengeId for
+/// real). No updatedAt - this is a point-in-time record, never revised.
+model TermsAcceptance {
+  id              String            @id @default(uuid()) @db.Uuid
+  userId          String            @db.Uuid
+  documentType    LegalDocumentType
+  documentVersion Int
+  acceptedAt      DateTime          @db.Timestamptz(6)
+  otpChallengeId  String
+  createdAt       DateTime          @default(now()) @db.Timestamptz(6)
+
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  legalDocumentVersion LegalDocumentVersion @relation(fields: [documentType, documentVersion], references: [type, version], onDelete: Restrict)
+
+  @@unique([userId, documentType, documentVersion])
+  @@map("terms_acceptances")
+}
+
+/// Refresh-session family. `tokenFamilyId` groups every refresh rotation
+/// descended from one login, so Task 06 can revoke the whole family on
+/// reuse detection without needing this task's own logic yet.
+model Session {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @db.Uuid
+  tokenFamilyId String    @db.Uuid
+  refreshHash   String    @unique
+  expiresAt     DateTime  @db.Timestamptz(6)
+  revokedAt     DateTime? @db.Timestamptz(6)
+  deviceId      String?   @db.Uuid
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model Device {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  label      String?
+  userAgent  String?
+  lastSeenAt DateTime? @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(6)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions Session[]
+
+  @@index([userId])
+  @@map("devices")
+}
+
+/// The fixed role vocabulary this task seeds - see
+/// scripts/bootstrap-superadmin.mjs and RoleAssignment below.
+enum RoleKey {
+  USER
+  SPACE_ADMIN
+  MODERATOR
+  SENIOR_ADMIN
+  SUPERADMIN
+  OPS
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         RoleKey  @unique
+  displayName String
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  roleAssignments RoleAssignment[]
+
+  @@map("roles")
+}
+
+enum RoleScopeType {
+  GLOBAL
+  SPACE
+}
+
+/// `scopeId` is null for GLOBAL-scope assignments (e.g. SUPERADMIN, OPS) and
+/// a space id for SPACE-scope ones (e.g. SPACE_ADMIN of one specific space -
+/// Task 10+). `assignedBy` is a full relation, not a bare column, so every
+/// assignment's grantor is queryable for audit purposes.
+model RoleAssignment {
+  id         String        @id @default(uuid()) @db.Uuid
+  userId     String        @db.Uuid
+  roleId     String        @db.Uuid
+  scopeType  RoleScopeType
+  scopeId    String?       @db.Uuid
+  assignedBy String        @db.Uuid
+  createdAt  DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime      @updatedAt @db.Timestamptz(6)
+
+  user           User @relation("RoleAssignmentUser", fields: [userId], references: [id], onDelete: Restrict)
+  role           Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  assignedByUser User @relation("RoleAssignmentAssignedBy", fields: [assignedBy], references: [id], onDelete: Restrict)
+
+  @@unique([userId, roleId, scopeType, scopeId])
+  @@map("role_assignments")
+}
+
+enum OfficialIdentityClaimStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+/// Minimal placeholder for the private, evidence-backed admin-eligibility
+/// claim Task 09 actually builds the submit/verify flow for. The status
+/// enum and 1:1 relation to User exist now so RoleAssignment's later
+/// "non-bootstrap admins need a VERIFIED claim" rule (Task 09) has
+/// something to check against from the start.
+model OfficialIdentityClaim {
+  id                 String                      @id @default(uuid()) @db.Uuid
+  userId             String                      @unique @db.Uuid
+  status             OfficialIdentityClaimStatus @default(PENDING)
+  evidenceCiphertext String?
+  reviewedBy         String?                     @db.Uuid
+  reviewedAt         DateTime?                   @db.Timestamptz(6)
+  createdAt          DateTime                    @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime                    @updatedAt @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("official_identity_claims")
+}
+
+/// Append-only. `targetId`/`actorId` are deliberately unconstrained (no FK) -
+/// an audit event's target can be any entity type, and the record must
+/// survive even if the target itself is later hard-deleted by a retention
+/// job (out of MVP scope, but the shape allows for it).
+model AuditEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  actorId       String?  @db.Uuid
+  action        String
+  targetType    String
+  targetId      String?  @db.Uuid
+  reason        String?
+  correlationId String
+  metadata      Json?
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_events")
+}

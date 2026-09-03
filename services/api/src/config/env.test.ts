@@ -97,4 +97,14 @@ describe('parseEnv', () => {
   it('does not fail-fast on strength in non-production environments', () => {
     expect(() => parseEnv({ ...validEnv, NODE_ENV: 'test', SESSION_HMAC_KEY: 'changeme-16chars' })).not.toThrow();
   });
+
+  it('parses fine without BOOTSTRAP_SUPERADMIN_PHONE - only the bootstrap script needs it', () => {
+    const env = parseEnv(validEnv);
+    expect(env.BOOTSTRAP_SUPERADMIN_PHONE).toBeUndefined();
+  });
+
+  it('passes BOOTSTRAP_SUPERADMIN_PHONE through when set', () => {
+    const env = parseEnv({ ...validEnv, BOOTSTRAP_SUPERADMIN_PHONE: '+989191953219' });
+    expect(env.BOOTSTRAP_SUPERADMIN_PHONE).toBe('+989191953219');
+  });
 });

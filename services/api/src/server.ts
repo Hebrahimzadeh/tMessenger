@@ -25,6 +25,7 @@ async function main() {
   // checkDatabase and the database plugin share the exact same client
   // without needing that same forward-reference.
   const app = buildApp({
+    legal: { appOrigin: env.APP_ORIGIN },
     health: {
       checkDatabase: async () => {
         await getPrisma().$queryRaw`SELECT 1`;

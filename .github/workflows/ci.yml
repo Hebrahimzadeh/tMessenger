@@ -32,6 +32,7 @@ jobs:
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://taavon:taavon_ci_password@localhost:5432/taavon
+      SHADOW_DATABASE_URL: postgresql://taavon:taavon_ci_password@localhost:5432/taavon_shadow
       REDIS_URL: redis://localhost:6379
       S3_ENDPOINT: http://localhost:9000
       S3_BUCKET: taavon-ci

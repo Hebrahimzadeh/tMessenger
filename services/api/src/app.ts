@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import cors from '@fastify/cors';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { healthRoutes, type HealthRouteOptions } from './modules/health/health.route';
+import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
 
 interface PackageJson {
   version: string;
@@ -14,6 +15,7 @@ const pkg = JSON.parse(
 
 export interface BuildAppOptions extends FastifyServerOptions {
   health?: HealthRouteOptions;
+  legal?: Partial<LegalRouteOptions>;
 }
 
 /**
@@ -22,7 +24,7 @@ export interface BuildAppOptions extends FastifyServerOptions {
  * (which alone is responsible for calling `.listen()`).
  */
 export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
-  const { health, ...fastifyOpts } = opts;
+  const { health, legal, ...fastifyOpts } = opts;
 
   const app = Fastify({
     logger: true,
@@ -36,6 +38,9 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
   app.register(cors, { origin: true });
 
   app.register(healthRoutes, { prefix: '/v1/health', version: pkg.version, ...health });
+  // Default appOrigin only matters for tests/dev that never call
+  // buildApp({legal: {...}}); server.ts always passes the real APP_ORIGIN.
+  app.register(legalRoutes, { prefix: '/v1/legal', appOrigin: 'http://localhost:4000', ...legal });
 
   return app;
 }
