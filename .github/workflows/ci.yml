@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: taavon
+          POSTGRES_PASSWORD: taavon_ci_password
+          POSTGRES_DB: taavon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U taavon -d taavon"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://taavon:taavon_ci_password@localhost:5432/taavon
+      REDIS_URL: redis://localhost:6379
+      S3_ENDPOINT: http://localhost:9000
+      S3_BUCKET: taavon-ci
+      S3_ACCESS_KEY: taavon_ci_access_key
+      S3_SECRET_KEY: taavon_ci_secret_key
+      # CI-only values, not secrets: env.ts's production fail-fast checks
+      # don't apply to NODE_ENV=test, but these still aren't placeholder
+      # strings so the same shape rules exercise realistically.
+      SESSION_HMAC_KEY: ci-only-session-hmac-key-not-for-real-use
+      PHONE_ENCRYPTION_KEY: ci-only-phone-encryption-key-not-for-real
+      APP_ORIGIN: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      # GitHub Actions' `services:` block can't override a service
+      # container's command/entrypoint, and MinIO needs `server /data
+      # --console-address :9001` to actually start - so it runs as an
+      # explicit step instead, the same image docker-compose.yml uses.
+      - name: Start object storage (MinIO)
+        run: |
+          docker run -d --name minio -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER="$S3_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+            minio/minio:latest server /data --console-address ":9001"
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:9000/minio/health/live && break
+            sleep 2
+          done
+          docker run --rm --network host \
+            -e MC_HOST_local="http://$S3_ACCESS_KEY:$S3_SECRET_KEY@localhost:9000" \
+            minio/mc:latest mb --ignore-existing "local/$S3_BUCKET"
+
+      - name: Install dependencies (locked)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck (root)
+        run: npm run typecheck
+
+      - name: Typecheck (services/api)
+        run: npm run typecheck --workspace services/api
+
+      - name: Typecheck (packages/database)
+        run: npm run typecheck --workspace packages/database
+
+      - name: Unit tests (root)
+        run: npm run test
+
+      - name: Unit tests (services/api)
+        run: npm run test --workspace services/api
+
+      - name: Unit tests (packages/database)
+        run: npm run test --workspace packages/database
+
+      - name: Migration from zero
+        run: npm run db:migrate --workspace packages/database
+
+      - name: Integration tests (real Postgres/Redis/MinIO)
+        run: npm run test:integration --workspace services/api
+
+      - name: Build
+        run: |
+          npm run build
+          npm run build --workspaces --if-present

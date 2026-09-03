@@ -1,0 +1,24 @@
+# Reverse proxy for the whole stack. One public entry point; api and web are
+# never exposed to the host directly (see docker-compose.yml).
+#
+# Routing (matches docs/*-mvp-sonnet5.md Task 04 Interfaces):
+#   /api/*       -> api service, with the /api prefix stripped (so
+#                   /api/v1/health/live reaches the API's own /v1/health/live)
+#   /socket.io/* -> api service, prefix preserved (Socket.IO's own
+#                   convention; the gateway itself lands in Task 20 - this
+#                   route is wired now so the proxy contract is stable)
+#   everything else -> web (the Next.js app)
+
+:80 {
+	handle_path /api/* {
+		reverse_proxy api:4000
+	}
+
+	handle /socket.io/* {
+		reverse_proxy api:4000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

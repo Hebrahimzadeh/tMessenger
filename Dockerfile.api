@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.7
+# Multi-stage build for the Fastify API. Node 24 throughout. Runs via tsx
+# rather than a tsc-compiled dist/: packages/contracts and packages/database
+# ship as raw TypeScript source (no build step, consumed via bundler-mode
+# resolution - see docs/reviews/task-03.md's Reviewer note), so a plain
+# `node dist/server.js` cannot resolve them without also giving both
+# packages their own compile step. tsx is a real production dependency here,
+# not a dev-only convenience.
+
+FROM node:24-alpine AS base
+WORKDIR /app
+
+# ---- deps: install once, cached separately from source changes ----
+FROM base AS deps
+COPY package.json package-lock.json ./
+COPY packages/contracts/package.json ./packages/contracts/package.json
+COPY packages/database/package.json ./packages/database/package.json
+COPY services/api/package.json ./services/api/package.json
+RUN npm ci
+
+# ---- runner: real source + generated Prisma client, non-root ----
+FROM base AS runner
+ENV NODE_ENV=production
+RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 apiuser
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./
+COPY packages/contracts ./packages/contracts
+COPY packages/database ./packages/database
+COPY services/api ./services/api
+# `prisma generate` only needs the schema, not a live connection, but
+# prisma.config.ts validates DATABASE_URL is *present* at config-load time.
+# This placeholder is never connected to - it's not a secret, just a string
+# shaped like one, and is not the same value the container runs with (that
+# comes from docker-compose.yml's real environment at runtime).
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" \
+  npm run db:generate --workspace packages/database
+RUN chown -R apiuser:nodejs /app
+USER apiuser
+WORKDIR /app/services/api
+EXPOSE 4000
+ENV PORT=4000
+ENV HOST=0.0.0.0
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+  CMD node -e "require('http').get('http://localhost:4000/v1/health/live', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"
+CMD ["npx", "tsx", "src/server.ts"]
