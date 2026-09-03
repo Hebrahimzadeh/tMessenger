@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginViaDevOtp } from './helpers/dev-login';
 
 const SEED_PLATFORM_NAMES = [
   'امانات محله انصار',
@@ -17,7 +18,11 @@ test('home page renders the platforms tab with all seed platforms and no console
   });
   page.on('pageerror', (error) => consoleErrors.push(error.message));
 
-  await page.goto('/');
+  // Task 07: `/` is no longer a public route (proxy.ts's allow-list is
+  // exactly /login, /legal/terms, /legal/privacy, /system-status) - a real
+  // session is required first. Login-flow network activity happens before
+  // the console-error listeners below would care about it either way.
+  await loginViaDevOtp(page, '/');
 
   await expect(page.getByRole('heading', { name: 'تعاون', level: 1 })).toBeVisible();
 

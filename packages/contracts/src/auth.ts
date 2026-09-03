@@ -52,16 +52,20 @@ export const authErrorCodeSchema = z.enum([
   'LEGAL_VERSION_CHANGED',
   'RATE_LIMITED',
   'SESSION_INVALID',
+  'CSRF_INVALID',
 ]);
 export type AuthErrorCode = z.infer<typeof authErrorCodeSchema>;
 
-export const legalVersionChangedResponseSchema = z.object({
-  error: z.literal('LEGAL_VERSION_CHANGED'),
-  current: z.object({
-    termsVersion: z.number().int().positive(),
-    privacyVersion: z.number().int().positive(),
-    termsUrl: z.string().url(),
-    privacyUrl: z.string().url(),
-  }),
+/**
+ * The shape of the one entry in `error.details` on a LEGAL_VERSION_CHANGED
+ * response (see packages/contracts/src/errors.ts's ApiErrorPayload) - lets
+ * the client re-render the acceptance text with the new version/links
+ * without a second round-trip to GET /v1/legal/current.
+ */
+export const legalVersionChangedDetailSchema = z.object({
+  termsVersion: z.number().int().positive(),
+  privacyVersion: z.number().int().positive(),
+  termsUrl: z.string().url(),
+  privacyUrl: z.string().url(),
 });
-export type LegalVersionChangedResponse = z.infer<typeof legalVersionChangedResponseSchema>;
+export type LegalVersionChangedDetail = z.infer<typeof legalVersionChangedDetailSchema>;

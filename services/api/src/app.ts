@@ -8,6 +8,7 @@ import { authRoutes, type AuthRouteOptions } from './modules/auth/auth.route';
 import { DevSmsSinkProvider } from './modules/auth/sms-provider';
 import { healthRoutes, type HealthRouteOptions } from './modules/health/health.route';
 import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
+import { apiError } from './lib/api-error';
 
 interface PackageJson {
   version: string;
@@ -52,10 +53,11 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
   // Zod's own parse errors (used directly in route handlers, e.g.
   // auth.route.ts's body validation - no route currently uses a Fastify
   // JSON-schema validator) would otherwise surface as an opaque 500;
-  // everything else keeps Fastify's normal default handling.
-  app.setErrorHandler((err, _request, reply) => {
+  // everything else keeps Fastify's normal default handling. Envelope shape
+  // is the one every error response uses - see lib/api-error.ts.
+  app.setErrorHandler((err, request, reply) => {
     if (err instanceof ZodError) {
-      reply.code(400).send({ error: 'VALIDATION_ERROR', issues: err.issues });
+      reply.code(400).send(apiError(request, 'VALIDATION_ERROR', 'داده ارسالی معتبر نیست.', err.issues));
       return;
     }
     reply.send(err);

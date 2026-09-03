@@ -38,7 +38,8 @@ describe('buildApp: error handling', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ error: 'VALIDATION_ERROR' });
+    expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+    expect(response.json().error.correlationId).toBeTruthy();
 
     await app.close();
   });

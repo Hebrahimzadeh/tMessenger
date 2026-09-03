@@ -1,13 +1,6 @@
-export interface ApiErrorPayload {
-  code: string;
-  message: string;
-  correlationId: string;
-  details?: unknown[];
-}
+import type { ApiErrorEnvelope, ApiErrorPayloadInput } from '@taavon/contracts';
 
-interface ApiErrorEnvelope {
-  error: ApiErrorPayload;
-}
+export type { ApiErrorPayloadInput as ApiErrorPayload };
 
 export class ApiError extends Error {
   readonly code: string;
@@ -15,7 +8,7 @@ export class ApiError extends Error {
   readonly details: unknown[];
   readonly status: number;
 
-  constructor(status: number, payload: ApiErrorPayload) {
+  constructor(status: number, payload: ApiErrorPayloadInput) {
     super(payload.message);
     this.name = 'ApiError';
     this.status = status;
@@ -48,25 +41,47 @@ function apiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/v1';
 }
 
+const CSRF_COOKIE_NAME = 'csrf_token';
+
+/**
+ * Reads a cookie by name from document.cookie. Returns undefined outside a
+ * browser (no `document`) - server-side callers of apiFetch never have a
+ * CSRF cookie to attach anyway (see Task 07's auth.route.ts: CSRF only
+ * gates browser-originated mutations against an existing session).
+ */
+function readCookie(name: string): string | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const match = document.cookie.split('; ').find((entry) => entry.startsWith(`${name}=`));
+  return match?.slice(name.length + 1);
+}
+
 /**
  * The only client web code is allowed to use to reach the API. Adds a
- * per-request correlation id, a 10s timeout, and normalizes every failure
- * (HTTP error envelope, timeout, or network failure) into a typed ApiError.
+ * per-request correlation id, a 10s timeout, `credentials: 'include'` (the
+ * session/CSRF cookies are set by the API's own origin - without this, the
+ * browser neither sends them cross-origin nor stores a cross-origin
+ * Set-Cookie response at all), the CSRF double-submit header whenever a
+ * csrf_token cookie already exists, and normalizes every failure (the
+ * standard {error:{code,message,correlationId,details}} envelope, a
+ * timeout, or a network failure) into a typed ApiError.
  */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const correlationId = createCorrelationId();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const csrfToken = readCookie(CSRF_COOKIE_NAME);
 
   try {
     let response: Response;
     try {
       response = await fetch(`${apiBaseUrl()}${path}`, {
         ...init,
+        credentials: 'include',
         signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           'X-Correlation-Id': correlationId,
+          ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
           ...init.headers,
         },
       });
