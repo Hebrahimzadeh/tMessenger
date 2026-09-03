@@ -11,3 +11,7 @@ playwright-report
 blob-report
 playwright/.cache
 coverage
+
+# Prisma generates its client into source (Prisma 7 requires an explicit
+# output path, no more node_modules); regenerate via `npm run db:generate`.
+packages/database/src/generated

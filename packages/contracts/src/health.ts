@@ -14,6 +14,7 @@ export const healthReadyResponseSchema = z.object({
   checks: z.object({
     database: healthCheckStatusSchema,
     redis: healthCheckStatusSchema,
+    storage: healthCheckStatusSchema,
   }),
 });
 export type HealthReadyResponse = z.infer<typeof healthReadyResponseSchema>;

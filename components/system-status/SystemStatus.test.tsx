@@ -27,18 +27,25 @@ describe('SystemStatus', () => {
   });
 
   it('shows each dependency check in Persian when every check is healthy', async () => {
-    vi.mocked(apiFetch).mockResolvedValue({ status: 'ok', checks: { database: 'ok', redis: 'ok' } });
+    vi.mocked(apiFetch).mockResolvedValue({
+      status: 'ok',
+      checks: { database: 'ok', redis: 'ok', storage: 'ok' },
+    });
 
     render(<SystemStatus />);
 
     await waitFor(() => expect(screen.getByText('وضعیت کلی: سالم')).toBeInTheDocument());
     expect(screen.getByText('پایگاه‌داده')).toBeInTheDocument();
     expect(screen.getByText('صف/کش (Redis)')).toBeInTheDocument();
-    expect(screen.getAllByText('سالم')).toHaveLength(2); // the two per-check labels; the overall-status line is asserted above
+    expect(screen.getByText('ذخیره‌سازی فایل')).toBeInTheDocument();
+    expect(screen.getAllByText('سالم')).toHaveLength(3); // the three per-check labels; the overall-status line is asserted above
   });
 
   it('shows a degraded status distinctly from a fully healthy one', async () => {
-    vi.mocked(apiFetch).mockResolvedValue({ status: 'degraded', checks: { database: 'down', redis: 'ok' } });
+    vi.mocked(apiFetch).mockResolvedValue({
+      status: 'degraded',
+      checks: { database: 'down', redis: 'ok', storage: 'ok' },
+    });
 
     render(<SystemStatus />);
 

@@ -7,6 +7,7 @@ export interface HealthRouteOptions {
   version?: string;
   checkDatabase?: DependencyCheck;
   checkRedis?: DependencyCheck;
+  checkStorage?: DependencyCheck;
 }
 
 async function toStatus(check: DependencyCheck): Promise<HealthCheckStatus> {
@@ -21,6 +22,7 @@ export async function healthRoutes(app: FastifyInstance, opts: HealthRouteOption
   const version = opts.version ?? '0.0.0';
   const checkDatabase = opts.checkDatabase ?? (async () => true);
   const checkRedis = opts.checkRedis ?? (async () => true);
+  const checkStorage = opts.checkStorage ?? (async () => true);
 
   // live: process is up and can serve traffic. Never depends on downstream
   // services, so it must stay 200 even while the database or Redis is down -
@@ -30,14 +32,19 @@ export async function healthRoutes(app: FastifyInstance, opts: HealthRouteOption
     return healthLiveResponseSchema.parse({ status: 'ok', version });
   });
 
-  // ready: are this process's dependencies actually usable right now. Task 02
-  // wires this to injectable stub checks (default: always healthy) so the
-  // degraded path is provable without real infrastructure; Task 03 passes in
-  // real database/Redis pings via the same `checkDatabase`/`checkRedis` seam.
+  // ready: are this process's dependencies actually usable right now.
+  // Task 02 wired this to injectable stub checks (default: always healthy)
+  // so the degraded path is provable without real infrastructure; Task 03
+  // passes in real database/Redis/storage pings via this same
+  // checkDatabase/checkRedis/checkStorage seam.
   app.get('/ready', async (_request, reply) => {
-    const [database, redis] = await Promise.all([toStatus(checkDatabase), toStatus(checkRedis)]);
-    const status = database === 'ok' && redis === 'ok' ? 'ok' : 'degraded';
-    const body = healthReadyResponseSchema.parse({ status, checks: { database, redis } });
+    const [database, redis, storage] = await Promise.all([
+      toStatus(checkDatabase),
+      toStatus(checkRedis),
+      toStatus(checkStorage),
+    ]);
+    const status = database === 'ok' && redis === 'ok' && storage === 'ok' ? 'ok' : 'degraded';
+    const body = healthReadyResponseSchema.parse({ status, checks: { database, redis, storage } });
 
     if (status === 'degraded') {
       reply.code(503);
