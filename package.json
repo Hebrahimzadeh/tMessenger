@@ -5,6 +5,10 @@
   "engines": {
     "node": "24.x"
   },
+  "workspaces": [
+    "services/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -17,6 +21,7 @@
     "review:gate": "node scripts/review-gate.mjs"
   },
   "dependencies": {
+    "@taavon/contracts": "*",
     "next": "16.2.11",
     "react": "19.2.0",
     "react-dom": "19.2.0"
@@ -31,7 +36,6 @@
     "autoprefixer": "^10.4.0",
     "eslint": "^9.39.5",
     "eslint-config-next": "16.2.11",
-    "@eslint/eslintrc": "^3.3.7",
     "vitest": "^4.1.11",
     "@vitejs/plugin-react": "^6.1.1",
     "@testing-library/react": "^16.3.3",
