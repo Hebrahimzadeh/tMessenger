@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@taavon/database';
 
 /**
@@ -56,6 +57,20 @@ export async function auditReuseDetected(prisma: PrismaClient, userId: string, t
       targetId: null,
       correlationId: tokenFamilyId,
       metadata: { tokenFamilyId },
+    },
+  });
+}
+
+/** Audits MFA activation (confirm() succeeding) - never the secret, code, or recovery codes, only that it happened. */
+export async function auditMfaConfirmed(prisma: PrismaClient, userId: string): Promise<void> {
+  await prisma.auditEvent.create({
+    data: {
+      actorId: userId,
+      action: 'auth.mfa_confirmed',
+      targetType: 'User',
+      targetId: userId,
+      correlationId: randomUUID(),
+      metadata: {},
     },
   });
 }

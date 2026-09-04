@@ -4,9 +4,12 @@ import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import { ZodError } from 'zod';
+import { adminRoutes, type AdminRouteOptions } from './modules/admin/admin.route';
 import { authRoutes, type AuthRouteOptions } from './modules/auth/auth.route';
+import { mfaRoutes, type MfaRouteOptions } from './modules/auth/mfa.route';
 import { DevSmsSinkProvider } from './modules/auth/sms-provider';
 import { healthRoutes, type HealthRouteOptions } from './modules/health/health.route';
+import { identityClaimRoutes, type IdentityClaimRouteOptions } from './modules/identity-claim/identity-claim.route';
 import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
 import { profileRoutes, type ProfileRouteOptions } from './modules/profile/profile.route';
 import { apiError } from './lib/api-error';
@@ -24,6 +27,9 @@ export interface BuildAppOptions extends FastifyServerOptions {
   legal?: Partial<LegalRouteOptions>;
   auth?: Partial<AuthRouteOptions>;
   profile?: Partial<ProfileRouteOptions>;
+  mfa?: Partial<MfaRouteOptions>;
+  identityClaim?: Partial<IdentityClaimRouteOptions>;
+  admin?: Partial<AdminRouteOptions>;
   /** Feeds CORS's allow-list and legal's URL resolution; server.ts always passes the real APP_ORIGIN. */
   appOrigin?: string;
 }
@@ -36,7 +42,7 @@ const DEFAULT_APP_ORIGIN = 'http://localhost:4000';
  * (which alone is responsible for calling `.listen()`).
  */
 export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
-  const { health, legal, auth, profile, appOrigin, ...fastifyOpts } = opts;
+  const { health, legal, auth, profile, mfa, identityClaim, admin, appOrigin, ...fastifyOpts } = opts;
   const resolvedAppOrigin = appOrigin ?? DEFAULT_APP_ORIGIN;
 
   const app = Fastify({
@@ -96,6 +102,25 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
     phoneEncryptionKey: 'test-only-default-phone-encryption-key-prod',
     ...profile,
+  });
+  app.register(mfaRoutes, {
+    prefix: '/v1/auth/mfa',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    phoneEncryptionKey: 'test-only-default-phone-encryption-key-prod',
+    isProduction: false,
+    ...mfa,
+  });
+  app.register(identityClaimRoutes, {
+    prefix: '/v1/me',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    phoneEncryptionKey: 'test-only-default-phone-encryption-key-prod',
+    ...identityClaim,
+  });
+  app.register(adminRoutes, {
+    prefix: '/v1/admin',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    phoneEncryptionKey: 'test-only-default-phone-encryption-key-prod',
+    ...admin,
   });
 
   return app;

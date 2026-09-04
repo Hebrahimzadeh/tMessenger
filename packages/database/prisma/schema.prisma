@@ -69,6 +69,7 @@ model User {
   phoneIdentity          PhoneIdentity?
   profile                UserProfile?
   officialIdentityClaim  OfficialIdentityClaim?
+  mfaEnrollment          MfaEnrollment?
   sessions               Session[]
   devices                Device[]
   termsAcceptances       TermsAcceptance[]
@@ -278,6 +279,50 @@ model OfficialIdentityClaim {
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@map("official_identity_claims")
+}
+
+enum MfaStatus {
+  PENDING
+  ACTIVE
+}
+
+/// TOTP enrollment - one per user. `secretCiphertext` is AES-256-GCM
+/// encrypted (same scheme as PhoneIdentity.phoneCiphertext), never stored
+/// or logged in plaintext. `status` starts PENDING at enroll() and only
+/// becomes ACTIVE once confirm() verifies the user actually has a working
+/// authenticator (Task 09 acceptance: "enrollment ناقص secret فعال ندارد" -
+/// an incomplete enrollment must not have an active secret). Re-enrolling
+/// replaces the row rather than creating a second one.
+model MfaEnrollment {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @unique @db.Uuid
+  secretCiphertext String
+  status           MfaStatus @default(PENDING)
+  confirmedAt      DateTime? @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  recoveryCodes MfaRecoveryCode[]
+
+  @@map("mfa_enrollments")
+}
+
+/// One-time-use fallback codes, generated once at confirm() and shown to
+/// the user exactly then - only `codeHash` (plain SHA-256, same reasoning
+/// as Session.refreshHash: the code itself carries the entropy) is ever
+/// persisted. `usedAt` makes each code single-use.
+model MfaRecoveryCode {
+  id           String    @id @default(uuid()) @db.Uuid
+  enrollmentId String    @db.Uuid
+  codeHash     String    @unique
+  usedAt       DateTime? @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+
+  enrollment MfaEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+
+  @@index([enrollmentId])
+  @@map("mfa_recovery_codes")
 }
 
 /// Append-only. `targetId`/`actorId` are deliberately unconstrained (no FK) -

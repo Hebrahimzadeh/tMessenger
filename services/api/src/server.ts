@@ -42,6 +42,19 @@ async function main() {
       sessionHmacKey: env.SESSION_HMAC_KEY,
       phoneEncryptionKey: env.PHONE_ENCRYPTION_KEY,
     },
+    mfa: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+      phoneEncryptionKey: env.PHONE_ENCRYPTION_KEY,
+      isProduction,
+    },
+    identityClaim: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+      phoneEncryptionKey: env.PHONE_ENCRYPTION_KEY,
+    },
+    admin: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+      phoneEncryptionKey: env.PHONE_ENCRYPTION_KEY,
+    },
     health: {
       checkDatabase: async () => {
         await getPrisma().$queryRaw`SELECT 1`;

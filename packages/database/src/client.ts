@@ -1,7 +1,7 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from './generated/prisma/client';
 
-export { PrismaClient } from './generated/prisma/client';
+export { Prisma, PrismaClient } from './generated/prisma/client';
 export * from './generated/prisma/enums';
 
 let cachedClient: PrismaClient | null = null;

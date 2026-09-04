@@ -79,7 +79,15 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
         credentials: 'include',
         signal: controller.signal,
         headers: {
-          'Content-Type': 'application/json',
+          // Only set Content-Type when there's an actual body - Fastify's
+          // strict JSON body parser rejects an empty body sent with
+          // content-type: application/json (FST_ERR_CTP_EMPTY_JSON_BODY)
+          // before the request ever reaches the route handler, and that
+          // error uses Fastify's own {statusCode,code,error,message} shape
+          // rather than this app's {error:{code,message,...}} envelope -
+          // so it was surfacing as a generic UNKNOWN_ERROR client-side for
+          // every body-less POST (e.g. /auth/mfa/enroll).
+          ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
           'X-Correlation-Id': correlationId,
           ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
           ...init.headers,

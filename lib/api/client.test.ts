@@ -71,6 +71,27 @@ describe('apiFetch', () => {
     });
   });
 
+  it('omits the Content-Type header on a body-less POST (Fastify\'s strict JSON parser rejects an empty body sent with content-type: application/json)', async () => {
+    const fetchMock = mockFetchOnce(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    await apiFetch('/auth/mfa/enroll', { method: 'POST' });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['Content-Type']).toBeUndefined();
+    expect(init.body).toBeUndefined();
+  });
+
+  it('still sends the Content-Type header when a body is provided', async () => {
+    const fetchMock = mockFetchOnce(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    await apiFetch('/auth/mfa/challenge', { method: 'POST', body: JSON.stringify({ code: '123456' }) });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers['Content-Type']).toBe('application/json');
+  });
+
   it('carries structured details through (e.g. LEGAL_VERSION_CHANGED)', async () => {
     const detail = { termsVersion: 2, privacyVersion: 1, termsUrl: 'https://x/terms', privacyUrl: 'https://x/privacy' };
     mockFetchOnce(
