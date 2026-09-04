@@ -3,12 +3,7 @@
 import { useEffect, useState } from 'react';
 import { otpRequestResponseSchema, otpVerifyResponseSchema } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
-
-const PERSIAN_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
-
-function toPersianDigits(input: string): string {
-  return input.replace(/[0-9]/g, (digit) => PERSIAN_DIGITS[Number(digit)] ?? digit);
-}
+import { toPersianDigits } from '@/lib/persian-digits';
 
 function formatCountdown(secondsLeft: number): string {
   const minutes = Math.floor(secondsLeft / 60)

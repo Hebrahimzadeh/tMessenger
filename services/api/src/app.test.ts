@@ -25,6 +25,25 @@ describe('buildApp: CORS', () => {
 
     await app.close();
   });
+
+  it('allows PATCH/PUT/DELETE preflights, not just @fastify/cors\'s own GET/HEAD/POST default (Task 08 finding: PATCH /v1/me/profile\'s real preflight failed until this was set explicitly)', async () => {
+    const app = buildApp({ logger: false, appOrigin: 'https://taavon.example' });
+
+    for (const method of ['PATCH', 'PUT', 'DELETE']) {
+      const preflight = await app.inject({
+        method: 'OPTIONS',
+        url: '/v1/me/profile',
+        headers: {
+          origin: 'https://taavon.example',
+          'access-control-request-method': method,
+          'access-control-request-headers': 'content-type',
+        },
+      });
+      expect(preflight.headers['access-control-allow-methods']).toContain(method);
+    }
+
+    await app.close();
+  });
 });
 
 describe('buildApp: error handling', () => {

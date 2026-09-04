@@ -22,9 +22,17 @@ import type { NextRequest } from 'next/server';
  * that doesn't actually hold up.
  */
 const PUBLIC_PATHS = ['/login', '/legal/terms', '/legal/privacy', '/system-status'];
+// Task 08 extends the public-route list: /u/[username] is a public profile
+// page (matches GET /v1/users/:username's own "public profile"
+// authorization, not the "user" level GET/PATCH /v1/me needs) - a prefix
+// rather than exact-match entry since every username gets its own path.
+const PUBLIC_PATH_PREFIXES = ['/u/'];
 
 function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  return (
+    PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`)) ||
+    PUBLIC_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+  );
 }
 
 export function proxy(request: NextRequest): NextResponse {

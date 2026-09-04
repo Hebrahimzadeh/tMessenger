@@ -8,6 +8,7 @@ import { authRoutes, type AuthRouteOptions } from './modules/auth/auth.route';
 import { DevSmsSinkProvider } from './modules/auth/sms-provider';
 import { healthRoutes, type HealthRouteOptions } from './modules/health/health.route';
 import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
+import { profileRoutes, type ProfileRouteOptions } from './modules/profile/profile.route';
 import { apiError } from './lib/api-error';
 
 interface PackageJson {
@@ -22,6 +23,7 @@ export interface BuildAppOptions extends FastifyServerOptions {
   health?: HealthRouteOptions;
   legal?: Partial<LegalRouteOptions>;
   auth?: Partial<AuthRouteOptions>;
+  profile?: Partial<ProfileRouteOptions>;
   /** Feeds CORS's allow-list and legal's URL resolution; server.ts always passes the real APP_ORIGIN. */
   appOrigin?: string;
 }
@@ -34,7 +36,7 @@ const DEFAULT_APP_ORIGIN = 'http://localhost:4000';
  * (which alone is responsible for calling `.listen()`).
  */
 export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
-  const { health, legal, auth, appOrigin, ...fastifyOpts } = opts;
+  const { health, legal, auth, profile, appOrigin, ...fastifyOpts } = opts;
   const resolvedAppOrigin = appOrigin ?? DEFAULT_APP_ORIGIN;
 
   const app = Fastify({
@@ -48,7 +50,22 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
   // origin (with credentials: true) rather than reflecting any origin back -
   // a browser will not attach cookies to a cross-origin request otherwise,
   // and reflecting-any-origin plus credentials would be an open CORS hole.
-  app.register(cors, { origin: resolvedAppOrigin, credentials: true });
+  //
+  // `methods` is explicit and covers the full REST verb set on purpose:
+  // @fastify/cors's own default is only GET,HEAD,POST, which silently
+  // fails the preflight for anything else. That went unnoticed through
+  // Tasks 06-07 because every route so far was GET or POST; Task 08's
+  // PATCH /v1/me/profile was the first real cross-origin PATCH and its
+  // preflight failed outright (confirmed via a direct curl OPTIONS check,
+  // not just theory) until this was added. PUT/DELETE aren't used yet
+  // either, but later tasks' endpoint table already calls for both
+  // (e.g. PUT/DELETE .../reactions/:type) - setting the real full set now
+  // avoids rediscovering this exact bug a third time.
+  app.register(cors, {
+    origin: resolvedAppOrigin,
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE'],
+  });
 
   // Zod's own parse errors (used directly in route handlers, e.g.
   // auth.route.ts's body validation - no route currently uses a Fastify
@@ -73,6 +90,12 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     appOrigin: resolvedAppOrigin,
     isProduction: false,
     ...auth,
+  });
+  app.register(profileRoutes, {
+    prefix: '/v1',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    phoneEncryptionKey: 'test-only-default-phone-encryption-key-prod',
+    ...profile,
   });
 
   return app;

@@ -19,7 +19,7 @@ describe('proxy', () => {
     expect(authenticated.headers.get('x-pathname')).toBe('/chats/42');
   });
 
-  const publicPaths = ['/login', '/legal/terms', '/legal/privacy', '/system-status'];
+  const publicPaths = ['/login', '/legal/terms', '/legal/privacy', '/system-status', '/u/ali_2000'];
   for (const path of publicPaths) {
     it(`allows an anonymous request through for the public path ${path}`, async () => {
       const response = await proxy(requestFor(path));
@@ -44,5 +44,10 @@ describe('proxy', () => {
   it('never redirects the root path\'s own login destination into a loop', async () => {
     const response = await proxy(requestFor('/login?next=/chats'));
     expect(response.status).not.toBe(307);
+  });
+
+  it('does not treat an unrelated path merely starting with "u" as public (prefix is "/u/", not "/u")', async () => {
+    const response = await proxy(requestFor('/uploads/123'));
+    expect(response.status).toBe(307);
   });
 });

@@ -38,6 +38,10 @@ async function main() {
       smsProvider,
       isProduction,
     },
+    profile: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+      phoneEncryptionKey: env.PHONE_ENCRYPTION_KEY,
+    },
     health: {
       checkDatabase: async () => {
         await getPrisma().$queryRaw`SELECT 1`;
