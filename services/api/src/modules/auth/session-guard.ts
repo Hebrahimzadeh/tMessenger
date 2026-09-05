@@ -41,3 +41,22 @@ export function requireSession(
     throw err;
   }
 }
+
+/**
+ * Same verification as `requireSession`, for routes that behave differently
+ * for an anonymous caller rather than rejecting them outright (Task 10's
+ * `GET /spaces/:idOrSlug`: public for anyone once PUBLISHED, owner-only
+ * before that). Never replies and never throws - a missing, expired, or
+ * tampered cookie is simply "no session", exactly like never having sent
+ * one at all.
+ */
+export function getOptionalSession(request: FastifyRequest, sessionHmacKey: string, now?: () => number): SessionUser | null {
+  const token = request.cookies[ACCESS_TOKEN_COOKIE];
+  if (!token) return null;
+
+  try {
+    return { userId: verifyAccessToken(token, sessionHmacKey, now).sub };
+  } catch {
+    return null;
+  }
+}

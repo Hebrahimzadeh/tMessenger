@@ -55,6 +55,9 @@ async function main() {
       sessionHmacKey: env.SESSION_HMAC_KEY,
       phoneEncryptionKey: env.PHONE_ENCRYPTION_KEY,
     },
+    spaces: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
     health: {
       checkDatabase: async () => {
         await getPrisma().$queryRaw`SELECT 1`;

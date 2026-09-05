@@ -7,3 +7,4 @@ export * from './legal';
 export * from './mfa';
 export * from './profile';
 export * from './role';
+export * from './space';

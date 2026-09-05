@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { requireSession } from './session-guard';
+import { getOptionalSession, requireSession } from './session-guard';
 import { ACCESS_TOKEN_COOKIE, signAccessToken } from './session-tokens';
 
 const SECRET = 'test-only-session-hmac-key';
@@ -55,5 +55,25 @@ describe('requireSession', () => {
     const result = requireSession(fakeRequest('not-a-real-token'), reply, SECRET);
     expect(result).toBeNull();
     expect(reply.code).toHaveBeenCalledWith(401);
+  });
+});
+
+describe('getOptionalSession', () => {
+  it('returns the user for a valid token', () => {
+    const token = signAccessToken('user-123', SECRET);
+    expect(getOptionalSession(fakeRequest(token), SECRET)).toEqual({ userId: 'user-123' });
+  });
+
+  it('returns null (never replies, never throws) when no cookie is present', () => {
+    expect(getOptionalSession(fakeRequest(undefined), SECRET)).toBeNull();
+  });
+
+  it('returns null for an expired or tampered token', () => {
+    expect(getOptionalSession(fakeRequest('not-a-real-token'), SECRET)).toBeNull();
+
+    let now = 1_000_000_000_000;
+    const token = signAccessToken('user-123', SECRET, () => now);
+    now += 16 * 60 * 1000;
+    expect(getOptionalSession(fakeRequest(token), SECRET, () => now)).toBeNull();
   });
 });

@@ -1,0 +1,371 @@
+import { randomBytes } from 'node:crypto';
+import type { SpaceGateVerdict, SpaceStatus } from '@taavon/database';
+import type { SpaceCardHint } from '@taavon/contracts';
+import { evaluateSpaceCreationGate } from './space-creation-gate';
+import { generateUniqueSlug } from './slug';
+
+export class SpaceNotFoundError extends Error {
+  constructor() {
+    super('Space not found.');
+    this.name = 'SpaceNotFoundError';
+  }
+}
+
+/** Caller is neither the creator nor holds a SPACE_ADMIN role scoped to this space. */
+export class NotSpaceEditorError extends Error {
+  constructor() {
+    super('Only the creator or a space admin may do this.');
+    this.name = 'NotSpaceEditorError';
+  }
+}
+
+/** The space's current status does not allow this action (e.g. editing an already-PUBLISHED/ARCHIVED space). */
+export class SpaceNotEditableError extends Error {
+  constructor(status: SpaceStatus) {
+    super(`Space in status ${status} cannot be edited.`);
+    this.name = 'SpaceNotEditableError';
+  }
+}
+
+export class DuplicateRoleKeyError extends Error {
+  constructor(key: string) {
+    super(`Role key "${key}" is used more than once.`);
+    this.name = 'DuplicateRoleKeyError';
+  }
+}
+
+/** publish() called when the latest version's gate verdict is not ALLOW - "publish بدون ALLOW ممنوع". */
+export class GateNotAllowedError extends Error {
+  constructor() {
+    super('This space cannot be published until it passes precheck with an ALLOW verdict.');
+    this.name = 'GateNotAllowedError';
+  }
+}
+
+export class RoleNotFoundError extends Error {
+  constructor() {
+    super('That role does not exist in this space.');
+    this.name = 'RoleNotFoundError';
+  }
+}
+
+export class InviteNotFoundError extends Error {
+  constructor() {
+    super('This invite link is invalid or has been revoked.');
+    this.name = 'InviteNotFoundError';
+  }
+}
+
+export interface SpaceRoleInputRecord {
+  key: string;
+  title: string;
+  description?: string;
+  isPrimary: boolean;
+}
+
+export interface SpaceRoleRecord {
+  id: string;
+  key: string;
+  title: string;
+  description: string | null;
+  isPrimary: boolean;
+}
+
+export interface SpaceVersionRecord {
+  versionNumber: number;
+  title: string;
+  purpose: string;
+  audience: string | null;
+  participationMethods: string[];
+  cardHints: SpaceCardHint[] | null;
+  policyVersion: number;
+  gateVerdict: SpaceGateVerdict | null;
+  gateReason: string | null;
+  primaryRoleIds: string[];
+  supplementaryRoleIds: string[];
+}
+
+export interface SpaceRecord {
+  id: string;
+  slug: string;
+  status: SpaceStatus;
+  creatorId: string;
+  publishedAt: Date | null;
+  archivedAt: Date | null;
+  latestVersion: SpaceVersionRecord;
+  /** Every role ever created for this space (not just the ones the latest version references) - the service filters down to `latestVersion`'s own reference set when building a response. */
+  roles: SpaceRoleRecord[];
+}
+
+export interface SpaceRepository {
+  slugExists(slug: string): Promise<boolean>;
+  /** Creates the Space row plus its version-1 SpaceDefinitionVersion, and appends a `space.created` outbox event, all in one transaction. */
+  createDraft(input: { title: string; slug: string; policyVersion: number; creatorId: string }): Promise<{ id: string }>;
+  findById(id: string): Promise<SpaceRecord | null>;
+  findBySlug(slug: string): Promise<SpaceRecord | null>;
+  /** SPACE-scoped SPACE_ADMIN role assignment (see schema.prisma's RoleAssignment) - the creator check itself is done by the service, not the repository. */
+  hasSpaceAdminRole(userId: string, spaceId: string): Promise<boolean>;
+  /** Upserts each role by (spaceId, key), inserts the new version, resets `Space.status` to DRAFT (a fresh edit always needs a fresh precheck), and appends a `space.versioned` outbox event - all in one transaction. */
+  createNewVersion(input: {
+    spaceId: string;
+    title: string;
+    purpose: string;
+    audience?: string;
+    participationMethods: string[];
+    cardHints?: SpaceCardHint[];
+    roles: SpaceRoleInputRecord[];
+    policyVersion: number;
+    createdBy: string;
+  }): Promise<{ versionNumber: number }>;
+  setGateVerdict(spaceId: string, versionNumber: number, verdict: SpaceGateVerdict, reason: string, newStatus: SpaceStatus): Promise<void>;
+  /** Sets status=PUBLISHED, publishedAt=now, and appends a `space.published` outbox event in one transaction. */
+  publish(spaceId: string): Promise<{ publishedAt: Date }>;
+  archive(spaceId: string): Promise<{ archivedAt: Date }>;
+  findRoleInSpace(spaceId: string, roleId: string): Promise<{ id: string } | null>;
+  /** Idempotent - joining a role already held is a no-op, not an error. */
+  joinRole(spaceId: string, userId: string, roleId: string): Promise<void>;
+  /** Idempotent - leaving a role never held is a no-op, not an error. */
+  leaveRole(userId: string, roleId: string): Promise<void>;
+  createInvite(spaceId: string, createdBy: string, token: string): Promise<void>;
+  /** Returns whether an active (unrevoked) invite with this token existed for this space. Idempotent - revoking an already-revoked or unknown token returns false rather than throwing. */
+  revokeInvite(spaceId: string, token: string): Promise<boolean>;
+  resolveInvite(token: string): Promise<{ spaceId: string; slug: string } | null>;
+}
+
+const STATUSES_OPEN_FOR_EDITING: SpaceStatus[] = ['DRAFT', 'PRECHECK_REQUIRED', 'HUMAN_REVIEW'];
+
+function assertEditable(status: SpaceStatus): void {
+  if (!STATUSES_OPEN_FOR_EDITING.includes(status)) {
+    throw new SpaceNotEditableError(status);
+  }
+}
+
+async function assertIsEditor(repo: SpaceRepository, space: SpaceRecord, userId: string): Promise<void> {
+  if (space.creatorId === userId) return;
+  if (await repo.hasSpaceAdminRole(userId, space.id)) return;
+  throw new NotSpaceEditorError();
+}
+
+function assertNoDuplicateRoleKeys(roles: SpaceRoleInputRecord[]): void {
+  const seen = new Set<string>();
+  for (const role of roles) {
+    if (seen.has(role.key)) throw new DuplicateRoleKeyError(role.key);
+    seen.add(role.key);
+  }
+}
+
+/**
+ * Creates a new draft space: just enough to claim a slug and start
+ * iterating (see this task's own review note on why create/update are
+ * deliberately split this way). Any authenticated user may create a draft -
+ * "ساخت draft آزاد" (Task 10's own acceptance line).
+ */
+export async function createSpace(repo: SpaceRepository, creatorId: string, title: string): Promise<{ id: string; slug: string }> {
+  const slug = await generateUniqueSlug(title, (candidate) => repo.slugExists(candidate));
+  const { id } = await repo.createDraft({ title, slug, policyVersion: 1, creatorId });
+  return { id, slug };
+}
+
+async function loadForEdit(repo: SpaceRepository, spaceId: string, userId: string): Promise<SpaceRecord> {
+  const space = await repo.findById(spaceId);
+  if (!space) throw new SpaceNotFoundError();
+  await assertIsEditor(repo, space, userId);
+  return space;
+}
+
+/**
+ * Replaces the space's definition with a brand-new immutable version -
+ * "هر edit یک version immutable". Only the creator/a space admin may call
+ * this, and only while the space is still in its pre-publish pipeline
+ * (DRAFT/PRECHECK_REQUIRED/HUMAN_REVIEW) - a PUBLISHED space's content is
+ * stable in this task's scope (see this task's own review note).
+ */
+export async function updateSpaceDefinition(
+  repo: SpaceRepository,
+  spaceId: string,
+  userId: string,
+  input: {
+    title: string;
+    purpose: string;
+    audience?: string;
+    participationMethods: string[];
+    cardHints?: SpaceCardHint[];
+    roles: SpaceRoleInputRecord[];
+    policyVersion: number;
+  }
+): Promise<{ versionNumber: number }> {
+  const space = await loadForEdit(repo, spaceId, userId);
+  assertEditable(space.status);
+  assertNoDuplicateRoleKeys(input.roles);
+
+  return repo.createNewVersion({ spaceId, createdBy: userId, ...input });
+}
+
+/**
+ * Runs the (temporary, rule-based) SpaceCreationGate against the space's
+ * current latest version and persists the verdict onto that exact version -
+ * editing again always produces a new version with a fresh, unset verdict,
+ * so a stale ALLOW can never silently carry over to changed content.
+ */
+export async function precheckSpace(
+  repo: SpaceRepository,
+  spaceId: string,
+  userId: string
+): Promise<{ verdict: SpaceGateVerdict; reason: string; status: SpaceStatus }> {
+  const space = await loadForEdit(repo, spaceId, userId);
+  assertEditable(space.status);
+
+  const { verdict, reason } = evaluateSpaceCreationGate({
+    title: space.latestVersion.title,
+    purpose: space.latestVersion.purpose,
+    participationMethods: space.latestVersion.participationMethods,
+    primaryRoleCount: space.latestVersion.primaryRoleIds.length,
+  });
+
+  const newStatus: SpaceStatus = verdict === 'HUMAN_REVIEW' ? 'HUMAN_REVIEW' : verdict === 'ALLOW' ? 'DRAFT' : 'PRECHECK_REQUIRED';
+  await repo.setGateVerdict(spaceId, space.latestVersion.versionNumber, verdict, reason, newStatus);
+
+  return { verdict, reason, status: newStatus };
+}
+
+/** "publish حداقل title، purpose، یک participation method و دو نقش اصلی متفاوت بخواهد" - re-checked here independently of the gate, which already implies these via REVISE, as defense in depth. */
+export async function publishSpace(repo: SpaceRepository, spaceId: string, userId: string): Promise<{ status: SpaceStatus; publishedAt: Date }> {
+  const space = await loadForEdit(repo, spaceId, userId);
+  if (space.status !== 'DRAFT') {
+    throw space.status === 'PUBLISHED' || space.status === 'ARCHIVED' || space.status === 'REMOVED' || space.status === 'TEMPORARILY_SUSPENDED'
+      ? new SpaceNotEditableError(space.status)
+      : new GateNotAllowedError();
+  }
+  if (space.latestVersion.gateVerdict !== 'ALLOW') {
+    throw new GateNotAllowedError();
+  }
+
+  const { publishedAt } = await repo.publish(spaceId);
+  return { status: 'PUBLISHED', publishedAt };
+}
+
+/** "archive را فقط creator/space-admin مجاز" - the same authorization set as editing, deliberately with no staff/SUPERADMIN override (unlike some other modules) since the plan states this restriction explicitly. */
+export async function archiveSpace(repo: SpaceRepository, spaceId: string, userId: string): Promise<{ status: SpaceStatus; archivedAt: Date }> {
+  const space = await repo.findById(spaceId);
+  if (!space) throw new SpaceNotFoundError();
+  await assertIsEditor(repo, space, userId);
+  if (space.status === 'ARCHIVED' || space.status === 'REMOVED') {
+    throw new SpaceNotEditableError(space.status);
+  }
+
+  const { archivedAt } = await repo.archive(spaceId);
+  return { status: 'ARCHIVED', archivedAt };
+}
+
+export interface SpaceView {
+  id: string;
+  slug: string;
+  status: SpaceStatus;
+  creatorId: string;
+  publishedAt: Date | null;
+  archivedAt: Date | null;
+  definition: {
+    versionNumber: number;
+    title: string;
+    purpose: string;
+    audience: string | null;
+    participationMethods: string[];
+    cardHints: SpaceCardHint[] | null;
+    policyVersion: number;
+    roles: SpaceRoleRecord[];
+  };
+  /** Only present for the owner/admin view - never on the public view (internal moderation state). */
+  gate?: { verdict: SpaceGateVerdict | null; reason: string | null };
+}
+
+function referencedRoles(space: SpaceRecord): SpaceRoleRecord[] {
+  const referencedIds = new Set([...space.latestVersion.primaryRoleIds, ...space.latestVersion.supplementaryRoleIds]);
+  return space.roles.filter((role) => referencedIds.has(role.id));
+}
+
+function toView(space: SpaceRecord, includeGate: boolean): SpaceView {
+  const view: SpaceView = {
+    id: space.id,
+    slug: space.slug,
+    status: space.status,
+    creatorId: space.creatorId,
+    publishedAt: space.publishedAt,
+    archivedAt: space.archivedAt,
+    definition: {
+      versionNumber: space.latestVersion.versionNumber,
+      title: space.latestVersion.title,
+      purpose: space.latestVersion.purpose,
+      audience: space.latestVersion.audience,
+      participationMethods: space.latestVersion.participationMethods,
+      cardHints: space.latestVersion.cardHints,
+      policyVersion: space.latestVersion.policyVersion,
+      roles: referencedRoles(space),
+    },
+  };
+  if (includeGate) {
+    view.gate = { verdict: space.latestVersion.gateVerdict, reason: space.latestVersion.gateReason };
+  }
+  return view;
+}
+
+/**
+ * "دسترسی عمومی فقط PUBLISHED را برگرداند" - a published space is visible
+ * to anyone; anything else 404s for everyone except its creator/space admin
+ * (never revealing to an unauthorized caller that a non-public space with
+ * this id/slug exists at all, matching Task 08's public-profile precedent).
+ */
+export async function getSpace(repo: SpaceRepository, idOrSlug: string, callerUserId: string | null): Promise<SpaceView> {
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrSlug);
+  const space = isUuid ? await repo.findById(idOrSlug) : await repo.findBySlug(idOrSlug);
+  if (!space) throw new SpaceNotFoundError();
+
+  if (space.status === 'PUBLISHED') {
+    return toView(space, false);
+  }
+
+  if (callerUserId && (space.creatorId === callerUserId || (await repo.hasSpaceAdminRole(callerUserId, space.id)))) {
+    return toView(space, true);
+  }
+
+  throw new SpaceNotFoundError();
+}
+
+export async function joinSpaceRole(repo: SpaceRepository, spaceId: string, roleId: string, userId: string): Promise<void> {
+  const role = await repo.findRoleInSpace(spaceId, roleId);
+  if (!role) throw new RoleNotFoundError();
+  await repo.joinRole(spaceId, userId, roleId);
+}
+
+export async function leaveSpaceRole(repo: SpaceRepository, spaceId: string, roleId: string, userId: string): Promise<void> {
+  const role = await repo.findRoleInSpace(spaceId, roleId);
+  if (!role) throw new RoleNotFoundError();
+  await repo.leaveRole(userId, roleId);
+}
+
+function randomInviteToken(): string {
+  return randomBytes(24).toString('base64url');
+}
+
+export async function createSpaceInvite(repo: SpaceRepository, spaceId: string, userId: string): Promise<{ token: string }> {
+  const space = await repo.findById(spaceId);
+  if (!space) throw new SpaceNotFoundError();
+  await assertIsEditor(repo, space, userId);
+
+  const token = randomInviteToken();
+  await repo.createInvite(spaceId, userId, token);
+  return { token };
+}
+
+export async function revokeSpaceInvite(repo: SpaceRepository, spaceId: string, token: string, userId: string): Promise<void> {
+  const space = await repo.findById(spaceId);
+  if (!space) throw new SpaceNotFoundError();
+  await assertIsEditor(repo, space, userId);
+  await repo.revokeInvite(spaceId, token);
+}
+
+/** "صرفاً shortcut عمومی" - resolving a token only reveals which space it points to; it grants no permission of its own, and never bypasses `getSpace`'s own visibility rules for whatever the caller does next. */
+export async function resolveSpaceInvite(repo: SpaceRepository, token: string): Promise<{ spaceId: string; slug: string }> {
+  const result = await repo.resolveInvite(token);
+  if (!result) throw new InviteNotFoundError();
+  return result;
+}
