@@ -12,6 +12,7 @@ import { healthRoutes, type HealthRouteOptions } from './modules/health/health.r
 import { identityClaimRoutes, type IdentityClaimRouteOptions } from './modules/identity-claim/identity-claim.route';
 import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
 import { profileRoutes, type ProfileRouteOptions } from './modules/profile/profile.route';
+import { spaceSearchRoutes, type SpaceSearchRouteOptions } from './modules/spaces/space-search.route';
 import { spaceRoutes, type SpaceRouteOptions } from './modules/spaces/space.route';
 import { apiError } from './lib/api-error';
 
@@ -32,6 +33,7 @@ export interface BuildAppOptions extends FastifyServerOptions {
   identityClaim?: Partial<IdentityClaimRouteOptions>;
   admin?: Partial<AdminRouteOptions>;
   spaces?: Partial<SpaceRouteOptions>;
+  spaceSearch?: Partial<SpaceSearchRouteOptions>;
   /** Feeds CORS's allow-list and legal's URL resolution; server.ts always passes the real APP_ORIGIN. */
   appOrigin?: string;
 }
@@ -44,7 +46,7 @@ const DEFAULT_APP_ORIGIN = 'http://localhost:4000';
  * (which alone is responsible for calling `.listen()`).
  */
 export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
-  const { health, legal, auth, profile, mfa, identityClaim, admin, spaces, appOrigin, ...fastifyOpts } = opts;
+  const { health, legal, auth, profile, mfa, identityClaim, admin, spaces, spaceSearch, appOrigin, ...fastifyOpts } = opts;
   const resolvedAppOrigin = appOrigin ?? DEFAULT_APP_ORIGIN;
 
   const app = Fastify({
@@ -128,6 +130,11 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     prefix: '/v1/spaces',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
     ...spaces,
+  });
+  app.register(spaceSearchRoutes, {
+    prefix: '/v1/spaces',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    ...spaceSearch,
   });
 
   return app;

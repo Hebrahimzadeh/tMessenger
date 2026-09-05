@@ -58,6 +58,9 @@ async function main() {
     spaces: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
     },
+    spaceSearch: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
     health: {
       checkDatabase: async () => {
         await getPrisma().$queryRaw`SELECT 1`;

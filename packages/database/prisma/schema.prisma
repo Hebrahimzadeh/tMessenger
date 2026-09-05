@@ -364,6 +364,13 @@ model Space {
   slug        String      @unique
   status      SpaceStatus @default(DRAFT)
   creatorId   String      @db.Uuid
+  /// Denormalized, normalized (lowercased, ي/ك→ی/ک) "title purpose" of the
+  /// *latest* version, maintained by space.repository.ts on every create/
+  /// edit - Task 11's search needs a single indexable column rather than a
+  /// join through SpaceDefinitionVersion for every query. See migration
+  /// 20260906000000_space_search for the pg_trgm GIN index over this column
+  /// (not expressible in schema.prisma - Prisma has no gin_trgm_ops type).
+  searchText  String      @default("")
   publishedAt DateTime?   @db.Timestamptz(6)
   archivedAt  DateTime?   @db.Timestamptz(6)
   createdAt   DateTime    @default(now()) @db.Timestamptz(6)

@@ -1,3 +1,5 @@
+import { normalizePersianLetters } from '../../lib/persian-text';
+
 /**
  * Deterministic, Persian/Latin-safe slug generation for space titles (this
  * task's own "slug فارسی/لاتین امن" requirement). Persian text is kept
@@ -5,13 +7,9 @@
  * case, and a transliteration scheme would be lossy and unfamiliar to
  * Persian-speaking users reading or sharing the resulting URL. Latin text
  * is lowercased. Arabic-style ي/ك are normalized to the Persian ی/ک forms
- * first, so two titles differing only by that common input variation (the
- * same normalization Task 11's search will need) collapse to one slug.
+ * first (see lib/persian-text.ts), so two titles differing only by that
+ * common input variation collapse to one slug.
  */
-function normalizePersianLetters(input: string): string {
-  return input.replace(/ي/g, 'ی').replace(/ك/g, 'ک');
-}
-
 const NON_SLUG_CHARS = /[^a-z0-9؀-ۿ]+/g;
 const EDGE_HYPHENS = /^-+|-+$/g;
 

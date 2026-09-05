@@ -1,6 +1,12 @@
 import type { Prisma, PrismaClient } from '@taavon/database';
 import type { SpaceCardHint } from '@taavon/contracts';
+import { normalizePersianLetters } from '../../lib/persian-text';
 import type { SpaceRecord, SpaceRepository, SpaceRoleInputRecord } from './space.service';
+
+/** Denormalized search column - see schema.prisma's Space.searchText comment. Same normalization as slug.ts/space-similarity.service.ts, so a query normalized the same way actually matches. */
+function buildSearchText(title: string, purpose: string, audience: string | undefined): string {
+  return normalizePersianLetters(`${title} ${purpose} ${audience ?? ''}`.trim().toLowerCase());
+}
 
 const LATEST_VERSION_INCLUDE = {
   definitionVersions: { orderBy: { versionNumber: 'desc' as const }, take: 1 },
@@ -78,7 +84,7 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
 
     async createDraft({ title, slug, policyVersion, creatorId }) {
       return prisma.$transaction(async (tx) => {
-        const space = await tx.space.create({ data: { slug, creatorId, status: 'DRAFT' } });
+        const space = await tx.space.create({ data: { slug, creatorId, status: 'DRAFT', searchText: buildSearchText(title, '', undefined) } });
         await tx.spaceDefinitionVersion.create({
           data: {
             spaceId: space.id,
@@ -148,7 +154,7 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
             createdBy,
           },
         });
-        await tx.space.update({ where: { id: spaceId }, data: { status: 'DRAFT' } });
+        await tx.space.update({ where: { id: spaceId }, data: { status: 'DRAFT', searchText: buildSearchText(title, purpose, audience) } });
         await tx.outboxEvent.create({
           data: {
             aggregateType: 'Space',

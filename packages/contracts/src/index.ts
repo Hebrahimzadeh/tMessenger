@@ -6,5 +6,7 @@ export * from './identity-claim';
 export * from './legal';
 export * from './mfa';
 export * from './profile';
+export * from './pagination';
 export * from './role';
 export * from './space';
+export * from './space-search';
