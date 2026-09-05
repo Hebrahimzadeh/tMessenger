@@ -19,7 +19,24 @@ describe('proxy', () => {
     expect(authenticated.headers.get('x-pathname')).toBe('/chats/42');
   });
 
-  const publicPaths = ['/login', '/legal/terms', '/legal/privacy', '/system-status', '/u/ali_2000'];
+  const publicPaths = [
+    '/login',
+    '/legal/terms',
+    '/legal/privacy',
+    '/system-status',
+    '/u/ali_2000',
+    '/spaces/baagh-mahalle',
+    '/spaces/new',
+    '/spaces/invite/some-token',
+  ];
+  // "/spaces/new" is deliberately in this list too, even though it does
+  // require a session - the proxy only ever does a cheap presence-only
+  // redirect (see this file's own header comment), and /spaces/ as a whole
+  // needs to skip it so /spaces/[slug] (a PUBLISHED space's public page)
+  // and /spaces/invite/[token] are reachable anonymously. /spaces/new's
+  // own real gate is app/spaces/new/page.tsx's requireUser() call, exactly
+  // the same division of labor already used for e.g. /u/[username] vs the
+  // separately-gated /profile.
   for (const path of publicPaths) {
     it(`allows an anonymous request through for the public path ${path}`, async () => {
       const response = await proxy(requestFor(path));

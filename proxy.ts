@@ -26,7 +26,17 @@ const PUBLIC_PATHS = ['/login', '/legal/terms', '/legal/privacy', '/system-statu
 // page (matches GET /v1/users/:username's own "public profile"
 // authorization, not the "user" level GET/PATCH /v1/me needs) - a prefix
 // rather than exact-match entry since every username gets its own path.
-const PUBLIC_PATH_PREFIXES = ['/u/'];
+//
+// Task 12 extends it again with /spaces/ - a PUBLISHED space's own page
+// (/spaces/[slug]) must be reachable by an anonymous visitor, matching
+// Task 10's "دسترسی عمومی فقط PUBLISHED را برگرداند"; the invite-resolve
+// page (/spaces/invite/[token]) needs no session either. This also makes
+// the proxy's own cheap check a no-op for /spaces/new specifically, but
+// that page still enforces the real gate itself via requireUser() (see
+// this file's own header comment: the proxy does only a cheap redirect,
+// never the authoritative check) - the same division of responsibility
+// /u/ already relies on for its own sibling authenticated pages elsewhere.
+const PUBLIC_PATH_PREFIXES = ['/u/', '/spaces/'];
 
 function isPublicPath(pathname: string): boolean {
   return (
