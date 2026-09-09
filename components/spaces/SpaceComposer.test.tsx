@@ -28,6 +28,7 @@ function baseSpaceResponse(overrides: Record<string, unknown> = {}) {
       policyVersion: 1,
       roles: [],
     },
+    canManage: true,
     gate: { verdict: null, reason: null },
     ...overrides,
   };

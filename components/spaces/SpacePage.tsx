@@ -14,6 +14,7 @@ import {
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { SpaceHeader } from './SpaceHeader';
 import { SpaceFeed } from './SpaceFeed';
+import { SpaceHealthPanel } from './SpaceHealthPanel';
 
 type GateState =
   | { status: 'loading' }
@@ -110,7 +111,7 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
   }
 
   const { space } = gate;
-  const isOwnerView = space.gate !== undefined;
+  const isOwnerView = space.canManage;
 
   return (
     <div dir="rtl" className="mx-auto max-w-2xl pb-10 text-right">
@@ -121,6 +122,13 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
         status={space.status}
         isOwnerView={isOwnerView}
       />
+
+      {isOwnerView && (
+        <section className="p-4">
+          <h2 className="mb-2 text-sm font-semibold text-gray-800">سلامت بستر</h2>
+          <SpaceHealthPanel spaceId={space.id} />
+        </section>
+      )}
 
       <section className="p-4">
         <h2 className="mb-2 text-sm font-semibold text-gray-800">نقش‌ها</h2>

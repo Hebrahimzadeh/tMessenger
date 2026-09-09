@@ -76,7 +76,18 @@ export const spaceDefinitionSchema = z.object({
 });
 export type SpaceDefinitionContract = z.infer<typeof spaceDefinitionSchema>;
 
-/** GET /v1/spaces/:idOrSlug response. `gate` is present only for the owner/admin view of a non-published space (never on the public view - it is internal moderation state, not something to expose to every visitor). */
+/**
+ * GET /v1/spaces/:idOrSlug response. `gate` is present only for the
+ * owner/admin view of a non-published space (never on the public view - it
+ * is internal pre-publish moderation state, not something to expose to
+ * every visitor, and meaningless once actually published). `canManage` is
+ * the frontend's real, always-present "is this caller the creator/a space
+ * admin" signal (Task 13 found this gap: relying on `gate`'s mere presence
+ * to decide this, as Task 10/11/12's UI originally did, silently breaks
+ * once a space is PUBLISHED - `gate` is always omitted then regardless of
+ * who's asking - which is exactly when an owner-only feature like Task
+ * 13's own health panel matters most).
+ */
 export const spaceResponseSchema = z.object({
   id: z.string().uuid(),
   slug: z.string(),
@@ -85,6 +96,7 @@ export const spaceResponseSchema = z.object({
   publishedAt: z.string().datetime().nullable(),
   archivedAt: z.string().datetime().nullable(),
   definition: spaceDefinitionSchema,
+  canManage: z.boolean(),
   gate: z.object({ verdict: spaceGateVerdictSchema.nullable(), reason: z.string().nullable() }).optional(),
 });
 export type SpaceResponse = z.infer<typeof spaceResponseSchema>;

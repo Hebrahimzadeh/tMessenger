@@ -274,7 +274,15 @@ export interface SpaceView {
     policyVersion: number;
     roles: SpaceRoleRecord[];
   };
-  /** Only present for the owner/admin view - never on the public view (internal moderation state). */
+  /**
+   * Always present, regardless of publish status - "is this caller the
+   * creator or a space admin" (see this field's own contract-level
+   * comment in packages/contracts/src/space.ts for the real bug this
+   * fixed: relying on `gate`'s mere presence as an ownership signal, as
+   * this module originally did, silently breaks once PUBLISHED).
+   */
+  canManage: boolean;
+  /** Only present for the owner/admin view of a *non-published* space - never on the public view (internal pre-publish moderation state, meaningless once actually published). */
   gate?: { verdict: SpaceGateVerdict | null; reason: string | null };
 }
 
@@ -283,7 +291,7 @@ function referencedRoles(space: SpaceRecord): SpaceRoleRecord[] {
   return space.roles.filter((role) => referencedIds.has(role.id));
 }
 
-function toView(space: SpaceRecord, includeGate: boolean): SpaceView {
+function toView(space: SpaceRecord, canManage: boolean): SpaceView {
   const view: SpaceView = {
     id: space.id,
     slug: space.slug,
@@ -301,8 +309,9 @@ function toView(space: SpaceRecord, includeGate: boolean): SpaceView {
       policyVersion: space.latestVersion.policyVersion,
       roles: referencedRoles(space),
     },
+    canManage,
   };
-  if (includeGate) {
+  if (canManage && space.status !== 'PUBLISHED') {
     view.gate = { verdict: space.latestVersion.gateVerdict, reason: space.latestVersion.gateReason };
   }
   return view;
@@ -319,12 +328,16 @@ export async function getSpace(repo: SpaceRepository, idOrSlug: string, callerUs
   const space = isUuid ? await repo.findById(idOrSlug) : await repo.findBySlug(idOrSlug);
   if (!space) throw new SpaceNotFoundError();
 
+  const canManage = Boolean(
+    callerUserId && (space.creatorId === callerUserId || (await repo.hasSpaceAdminRole(callerUserId, space.id)))
+  );
+
   if (space.status === 'PUBLISHED') {
-    return toView(space, false);
+    return toView(space, canManage);
   }
 
-  if (callerUserId && (space.creatorId === callerUserId || (await repo.hasSpaceAdminRole(callerUserId, space.id)))) {
-    return toView(space, true);
+  if (canManage) {
+    return toView(space, canManage);
   }
 
   throw new SpaceNotFoundError();

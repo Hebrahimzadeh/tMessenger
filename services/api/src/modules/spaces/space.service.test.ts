@@ -491,6 +491,23 @@ describe('getSpace', () => {
     expect(view.gate).toBeUndefined();
   });
 
+  it("canManage stays true for the creator even after publishing - a real bug found in Task 13: gate's mere presence was originally the only ownership signal, and gate is always omitted once PUBLISHED regardless of who's asking, which silently broke owner-only UI (like Task 13's own health panel) for every published space", async () => {
+    const { repo } = fakeSpaceRepo();
+    const id = await createAndFillValidDraft(repo, 'user-1');
+    await precheckSpace(repo, id, 'user-1');
+    await publishSpace(repo, id, 'user-1');
+
+    const ownerView = await getSpace(repo, id, 'user-1');
+    expect(ownerView.canManage).toBe(true);
+    expect(ownerView.gate).toBeUndefined(); // still correctly omitted - it's pre-publish moderation state, not the ownership signal
+
+    const anonView = await getSpace(repo, id, null);
+    expect(anonView.canManage).toBe(false);
+
+    const strangerView = await getSpace(repo, id, 'stranger');
+    expect(strangerView.canManage).toBe(false);
+  });
+
   it('a DRAFT space 404s for an anonymous caller', async () => {
     const { repo } = fakeSpaceRepo();
     const { id } = await createSpace(repo, 'user-1', 'باغ محله');

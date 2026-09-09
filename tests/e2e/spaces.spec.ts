@@ -28,6 +28,16 @@ test('creates and publishes a space through the full wizard, then the public pag
   const href = await spaceLink.getAttribute('href');
   expect(href).toMatch(/^\/spaces\//);
 
+  // As the owner: the health panel is visible (creator/admin only, per
+  // Task 13's own "endpoint health فقط creator/admin") and shows the
+  // real, freshly-computed NEW status - no snapshot existed yet (the
+  // worker hasn't run), so this also confirms getSpaceHealth's on-demand
+  // compute-and-store fallback actually works end to end, not just its
+  // unit tests.
+  await spaceLink.click();
+  await expect(page.getByText('سلامت بستر')).toBeVisible();
+  await expect(page.getByText('جدید')).toBeVisible();
+
   // The public page, from a completely separate, anonymous browser context.
   // `href` holds the raw (non-percent-encoded) Persian slug, exactly as
   // Next.js's <Link> renders it - a real click normalizes this the same

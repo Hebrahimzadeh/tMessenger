@@ -32,6 +32,7 @@ function fullSpace(overrides: Record<string, unknown> = {}) {
         { id: '44444444-4444-4444-8444-444444444444', key: 'contributor', title: 'همکار', description: null, isPrimary: true },
       ],
     },
+    canManage: false,
     ...overrides,
   };
 }
@@ -85,7 +86,7 @@ describe('SpacePage', () => {
   });
 
   it('shows an invite-link generator only for the owner/admin view (gate field present)', async () => {
-    mockFetchByUrl({ [`/spaces/${SPACE_ID}`]: fullSpace({ gate: { verdict: 'ALLOW', reason: 'x' } }) });
+    mockFetchByUrl({ [`/spaces/${SPACE_ID}`]: fullSpace({ canManage: true, gate: { verdict: 'ALLOW', reason: 'x' } }) });
     render(<SpacePage idOrSlug={SPACE_ID} />);
     await screen.findByText('سازمان‌دهنده');
     expect(screen.getByRole('button', { name: 'ساخت پیوند دعوت' })).toBeInTheDocument();
@@ -98,10 +99,39 @@ describe('SpacePage', () => {
     expect(screen.queryByRole('button', { name: 'ساخت پیوند دعوت' })).not.toBeInTheDocument();
   });
 
+  it('shows the health panel only for the owner/admin view, never for a public visitor', async () => {
+    mockFetchByUrl({
+      '/health': {
+        status: 'ACTIVE',
+        cardCount: 0,
+        contributorCount: 2,
+        meaningfulViewCount: 0,
+        firstUseLatencySeconds: null,
+        roleActivity: { totalRoleCount: 2, activeRoleCount: 2 },
+        crossRoleCardRate: 0,
+        appliedRate: 0,
+        reservationClosedRate: 0,
+        reportQuality: null,
+        lastActivityAt: null,
+        suggestions: [],
+        computedAt: '2026-09-09T00:00:00.000Z',
+      },
+      [`/spaces/${SPACE_ID}`]: fullSpace({ canManage: true, gate: { verdict: 'ALLOW', reason: 'x' } }),
+    });
+    const owner = render(<SpacePage idOrSlug={SPACE_ID} />);
+    await owner.findByText('سلامت بستر');
+    owner.unmount();
+
+    mockFetchByUrl({ [`/spaces/${SPACE_ID}`]: fullSpace() });
+    render(<SpacePage idOrSlug={SPACE_ID} />);
+    await screen.findByText('سازمان‌دهنده');
+    expect(screen.queryByText('سلامت بستر')).not.toBeInTheDocument();
+  });
+
   it('creates and displays an invite link on demand', async () => {
     mockFetchByUrl({
       '/invites': { token: 'abc123token' },
-      [`/spaces/${SPACE_ID}`]: fullSpace({ gate: { verdict: 'ALLOW', reason: 'x' } }),
+      [`/spaces/${SPACE_ID}`]: fullSpace({ canManage: true, gate: { verdict: 'ALLOW', reason: 'x' } }),
     });
     const user = userEvent.setup();
     render(<SpacePage idOrSlug={SPACE_ID} />);

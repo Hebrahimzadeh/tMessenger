@@ -382,6 +382,7 @@ model Space {
   roleMemberships    SpaceRoleMembership[]
   invites            SpaceInvite[]
   followers          SpaceFollower[]
+  healthSnapshot     SpaceHealthSnapshot?
 
   @@index([status])
   @@map("spaces")
@@ -499,6 +500,52 @@ model SpaceFollower {
 
   @@unique([spaceId, userId])
   @@map("space_followers")
+}
+
+// Task 13: independent, multi-dimensional space health - new migration,
+// additive only (see the migration rule at the top of this file).
+
+enum SpaceHealthStatus {
+  NEW
+  ACTIVE
+  FRAGILE
+  DORMANT
+}
+
+/// One row per space, upserted (not appended) by the daily worker job
+/// (services/worker) - "job روزانهٔ idempotent": running it twice for the
+/// same space on the same day produces the same row, not a duplicate.
+/// Deliberately a *vector* of independent dimensions, never collapsed into
+/// a single number anywhere in this schema, the API contract, or the UI
+/// ("بدون score عددی واحد") - see space-health.service.ts for why most of
+/// these fields are honestly 0/null at this point in the plan: their
+/// underlying event streams (real cards, reactions, views, reservations,
+/// reports) don't exist yet (Task 14/15/16/27+), and this task does not
+/// fabricate data for features that aren't built.
+model SpaceHealthSnapshot {
+  id                     String            @id @default(uuid()) @db.Uuid
+  spaceId                String            @unique @db.Uuid
+  status                 SpaceHealthStatus
+  cardCount              Int               @default(0)
+  contributorCount       Int               @default(0)
+  meaningfulViewCount    Int               @default(0)
+  firstUseLatencySeconds Int?
+  roleActivity           Json
+  crossRoleCardRate      Float             @default(0)
+  appliedRate            Float             @default(0)
+  reservationClosedRate  Float             @default(0)
+  reportQuality          Float?
+  lastActivityAt         DateTime?         @db.Timestamptz(6)
+  /// Suggestion codes computed alongside the snapshot ("فقط پیشنهاد و
+  /// اعلان ثبت کن" - recorded here for the dashboard to display, never
+  /// acted on automatically - no auto-archive anywhere in this task).
+  suggestions            Json
+  computedAt             DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime          @updatedAt @db.Timestamptz(6)
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+
+  @@map("space_health_snapshots")
 }
 
 /// Append-only. `targetId`/`actorId` are deliberately unconstrained (no FK) -

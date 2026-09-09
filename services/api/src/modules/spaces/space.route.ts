@@ -6,12 +6,15 @@ import {
   precheckSpaceResponseSchema,
   publishSpaceResponseSchema,
   resolveSpaceInviteResponseSchema,
+  spaceHealthResponseSchema,
   spaceRoleMembershipActionResponseSchema,
   spaceResponseSchema,
   updateSpaceDefinitionBodySchema,
 } from '@taavon/contracts';
 import { apiError } from '../../lib/api-error';
 import { getOptionalSession, requireSession } from '../auth/session-guard';
+import { createPrismaSpaceHealthRepository, type SpaceHealthRepository } from '@taavon/space-health';
+import { getSpaceHealth } from './space-health.service';
 import { createPrismaSpaceRepository } from './space.repository';
 import {
   archiveSpace,
@@ -38,6 +41,7 @@ import {
 export interface SpaceRouteOptions {
   sessionHmacKey: string;
   spaceRepository?: SpaceRepository;
+  spaceHealthRepository?: SpaceHealthRepository;
 }
 
 function toResponse(view: Awaited<ReturnType<typeof getSpace>>) {
@@ -49,6 +53,7 @@ function toResponse(view: Awaited<ReturnType<typeof getSpace>>) {
     publishedAt: view.publishedAt?.toISOString() ?? null,
     archivedAt: view.archivedAt?.toISOString() ?? null,
     definition: view.definition,
+    canManage: view.canManage,
     ...(view.gate ? { gate: view.gate } : {}),
   });
 }
@@ -56,6 +61,9 @@ function toResponse(view: Awaited<ReturnType<typeof getSpace>>) {
 export async function spaceRoutes(app: FastifyInstance, opts: SpaceRouteOptions) {
   function repo(): SpaceRepository {
     return opts.spaceRepository ?? createPrismaSpaceRepository(app.db);
+  }
+  function healthRepo(): SpaceHealthRepository {
+    return opts.spaceHealthRepository ?? createPrismaSpaceHealthRepository(app.db);
   }
 
   app.post('/', async (request, reply) => {
@@ -186,6 +194,39 @@ export async function spaceRoutes(app: FastifyInstance, opts: SpaceRouteOptions)
       }
       if (err instanceof SpaceNotEditableError) {
         return reply.code(422).send(apiError(request, 'SPACE_NOT_EDITABLE', 'این بستر پیش‌تر بایگانی یا حذف شده است.'));
+      }
+      throw err;
+    }
+  });
+
+  app.get('/:spaceId/health', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const { spaceId } = request.params as { spaceId: string };
+
+    try {
+      const snapshot = await getSpaceHealth(repo(), healthRepo(), spaceId, user.userId);
+      return spaceHealthResponseSchema.parse({
+        status: snapshot.status,
+        cardCount: snapshot.cardCount,
+        contributorCount: snapshot.contributorCount,
+        meaningfulViewCount: snapshot.meaningfulViewCount,
+        firstUseLatencySeconds: snapshot.firstUseLatencySeconds,
+        roleActivity: snapshot.roleActivity,
+        crossRoleCardRate: snapshot.crossRoleCardRate,
+        appliedRate: snapshot.appliedRate,
+        reservationClosedRate: snapshot.reservationClosedRate,
+        reportQuality: snapshot.reportQuality,
+        lastActivityAt: snapshot.lastActivityAt?.toISOString() ?? null,
+        suggestions: snapshot.suggestions,
+        computedAt: snapshot.computedAt.toISOString(),
+      });
+    } catch (err) {
+      if (err instanceof SpaceNotFoundError) {
+        return reply.code(404).send(apiError(request, 'SPACE_NOT_FOUND', 'این بستر یافت نشد.'));
+      }
+      if (err instanceof NotSpaceEditorError) {
+        return reply.code(403).send(apiError(request, 'FORBIDDEN', 'فقط سازنده یا مدیر این بستر می‌تواند سلامت آن را ببیند.'));
       }
       throw err;
     }

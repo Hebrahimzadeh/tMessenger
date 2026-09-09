@@ -9,4 +9,5 @@ export * from './profile';
 export * from './pagination';
 export * from './role';
 export * from './space';
+export * from './space-health';
 export * from './space-search';

@@ -6,6 +6,7 @@ import type { SpaceStatus } from '@taavon/database';
 import { spaceRoutes } from './space.route';
 import { ACCESS_TOKEN_COOKIE, signAccessToken } from '../auth/session-tokens';
 import type { SpaceRepository, SpaceRoleRecord, SpaceVersionRecord } from './space.service';
+import type { SpaceHealthRepository } from '@taavon/space-health';
 
 const SESSION_HMAC_KEY = 'test-only-session-hmac-key';
 
@@ -133,10 +134,32 @@ function fakeSpaceRepo(): SpaceRepository {
   };
 }
 
-function buildApp(repo: SpaceRepository) {
+function fakeHealthRepo(overrides: Partial<SpaceHealthRepository> = {}): SpaceHealthRepository {
+  return {
+    gatherSignals: async () => ({
+      publishedAt: new Date(),
+      lastActivityAt: null,
+      contributorCount: 0,
+      totalRoleCount: 0,
+      activeRoleCount: 0,
+      cardCount: 0,
+    }),
+    upsertSnapshot: async () => {},
+    getSnapshot: async () => null,
+    listPublishedSpaceIds: async () => [],
+    ...overrides,
+  };
+}
+
+function buildApp(repo: SpaceRepository, healthRepo?: SpaceHealthRepository) {
   const app = Fastify();
   app.register(cookie);
-  app.register(spaceRoutes, { prefix: '/v1/spaces', sessionHmacKey: SESSION_HMAC_KEY, spaceRepository: repo });
+  app.register(spaceRoutes, {
+    prefix: '/v1/spaces',
+    sessionHmacKey: SESSION_HMAC_KEY,
+    spaceRepository: repo,
+    spaceHealthRepository: healthRepo ?? fakeHealthRepo(),
+  });
   return app;
 }
 
@@ -380,6 +403,59 @@ describe('cardHints validation ("template کارت نمونه فقط با isExam
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().definition.cardHints).toEqual([{ isExample: true, label: 'نمونه', title: 'یک کارت نمونه' }]);
+    await app.close();
+  });
+});
+
+describe('GET /v1/spaces/:spaceId/health', () => {
+  it('requires a session', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const response = await app.inject({ method: 'GET', url: `/v1/spaces/${randomUUID()}/health` });
+    expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('returns 403 for a caller who is neither creator nor space admin', async () => {
+    const spaceRepo = fakeSpaceRepo();
+    const app = buildApp(spaceRepo);
+    const created = await app.inject({ method: 'POST', url: '/v1/spaces', cookies: sessionCookieFor(USER_1), payload: { title: 'x' } });
+    const spaceId = created.json().id as string;
+
+    const response = await app.inject({ method: 'GET', url: `/v1/spaces/${spaceId}/health`, cookies: sessionCookieFor(STRANGER) });
+    expect(response.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("returns the creator's own snapshot with no combined score field anywhere in the response", async () => {
+    const spaceRepo = fakeSpaceRepo();
+    const healthRepo = fakeHealthRepo({
+      getSnapshot: async () => ({
+        status: 'ACTIVE',
+        cardCount: 0,
+        contributorCount: 2,
+        meaningfulViewCount: 0,
+        firstUseLatencySeconds: null,
+        roleActivity: { totalRoleCount: 2, activeRoleCount: 2 },
+        crossRoleCardRate: 0,
+        appliedRate: 0,
+        reservationClosedRate: 0,
+        reportQuality: null,
+        lastActivityAt: null,
+        suggestions: [{ code: 'CREATE_FIRST_CARD' }],
+        computedAt: new Date('2026-09-09T00:00:00.000Z'),
+      }),
+    });
+    const app = buildApp(spaceRepo, healthRepo);
+    const created = await app.inject({ method: 'POST', url: '/v1/spaces', cookies: sessionCookieFor(USER_1), payload: { title: 'x' } });
+    const spaceId = created.json().id as string;
+
+    const response = await app.inject({ method: 'GET', url: `/v1/spaces/${spaceId}/health`, cookies: sessionCookieFor(USER_1) });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.status).toBe('ACTIVE');
+    expect(body.suggestions).toEqual([{ code: 'CREATE_FIRST_CARD' }]);
+    expect(Object.keys(body)).not.toContain('score');
+    expect(Object.keys(body)).not.toContain('overallScore');
     await app.close();
   });
 });
