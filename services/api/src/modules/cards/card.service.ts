@@ -2,6 +2,7 @@ import type { CardAttachmentKind, CardAttachmentStatus, CardKind, CardStatus, Sp
 import type { CardLinkInput, CardLocationInput } from '@taavon/contracts';
 import { deriveTitle } from './card-state-machine';
 import { inferCardKind } from './card-kind-inference';
+import { rankCards, type SpaceHealthStatusForRanking } from './card-ranking';
 
 export class CardNotFoundError extends Error {
   constructor() {
@@ -75,6 +76,7 @@ export interface CardListRow {
   title: string;
   body: string;
   attachmentCount: number;
+  reactionCount: number;
 }
 
 export interface CreateCardInput {
@@ -118,6 +120,8 @@ export interface CardRepository {
   }): Promise<{ revisionNumber: number }>;
   findCard(cardId: string): Promise<CardRecord | null>;
   listCards(spaceId: string, params: { limit: number; before: { publishedAt: string; id: string } | null }): Promise<CardListRow[]>;
+  /** Null when no snapshot has ever been computed for the space (e.g. brand new) - ranking treats that the same as a healthy default. */
+  getSpaceHealthStatus(spaceId: string): Promise<SpaceHealthStatusForRanking>;
 }
 
 const MEANINGFUL_ATTACHMENT_KINDS: CardAttachmentKind[] = ['IMAGE', 'AUDIO', 'VIDEO', 'FILE'];
@@ -256,10 +260,21 @@ export interface CardListResult {
   nextCursor: string | null;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * The keyset cursor stays purely recency-based - it names an exact
+ * `(publishedAt, id)` boundary, so paging is stable and nothing is ever
+ * skipped or repeated. Ranking ("ترکیب تازگی/relevance/تنوع/health و
+ * reaction فقط ضریب کوچک سقف‌دار") only reorders *within* the page that
+ * boundary already fetched - `rankCards` (see card-ranking.ts) is applied
+ * to the page's rows before they're returned, never to which rows are
+ * fetched, so the two concerns can't interfere with each other.
+ */
 export async function listCards(
   repo: CardRepository,
   spaceId: string,
-  params: { limit: number; cursor?: string }
+  params: { limit: number; cursor?: string; now?: Date }
 ): Promise<CardListResult> {
   const spaceStatus = await repo.getSpaceStatus(spaceId);
   if (spaceStatus !== 'PUBLISHED') throw new SpaceNotFoundForCardError();
@@ -270,8 +285,23 @@ export async function listCards(
   const page = rows.slice(0, params.limit);
   const last = page[page.length - 1];
 
+  const now = params.now ?? new Date();
+  const spaceHealth = page.length > 0 ? await repo.getSpaceHealthStatus(spaceId) : null;
+  const order = rankCards(
+    page.map((row) => ({
+      cardId: row.id,
+      authorId: row.authorId,
+      relevance: 1, // no query in a plain space feed - same convention as space search.
+      ageDays: Math.max(0, (now.getTime() - row.publishedAt.getTime()) / MS_PER_DAY),
+      reactionCount: row.reactionCount,
+      spaceHealth,
+    }))
+  );
+  const byId = new Map(page.map((row) => [row.id, row]));
+  const ranked = order.map((id) => byId.get(id)!);
+
   return {
-    items: page,
+    items: ranked,
     nextCursor: hasMore && last ? encodeCursor({ publishedAt: last.publishedAt.toISOString(), id: last.id }) : null,
   };
 }

@@ -240,7 +240,7 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
         take: limit,
         include: {
           revisions: { orderBy: { revisionNumber: 'desc' }, take: 1 },
-          _count: { select: { attachments: true } },
+          _count: { select: { attachments: true, reactions: true } },
         },
       });
 
@@ -254,8 +254,14 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
           title: revision.title,
           body: revision.body,
           attachmentCount: card._count.attachments,
+          reactionCount: card._count.reactions,
         };
       });
+    },
+
+    async getSpaceHealthStatus(spaceId) {
+      const snapshot = await prisma.spaceHealthSnapshot.findUnique({ where: { spaceId }, select: { status: true } });
+      return snapshot?.status ?? null;
     },
   };
 }

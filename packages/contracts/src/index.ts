@@ -10,5 +10,6 @@ export * from './pagination';
 export * from './role';
 export * from './space';
 export * from './card';
+export * from './public-comment';
 export * from './space-health';
 export * from './space-search';

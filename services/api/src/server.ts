@@ -6,6 +6,8 @@ import databasePlugin from './plugins/database';
 import redisPlugin from './plugins/redis';
 import { S3StorageProvider } from './modules/storage/s3-storage-provider';
 import { createSmsProvider } from './modules/auth/sms-provider';
+import { createRedisRateLimiter, type RateLimiter } from './modules/auth/rate-limiter';
+import { REACTION_RATE_LIMIT, REACTION_RATE_WINDOW_SECONDS } from './modules/cards/public-comment.route';
 
 async function main() {
   // Fails fast (before any plugin registration or listen) on missing env or,
@@ -23,6 +25,14 @@ async function main() {
   // Fails fast in production without a real provider configured (Task 06
   // acceptance: "production بدون provider معتبر start نشود").
   const smsProvider = createSmsProvider(env);
+
+  // Same forward-reference trick as checkRedis below: `.consume` is a
+  // closure body that only runs at request time, well after `app` and the
+  // redis plugin are both fully set up, so referencing `app.redis` here
+  // (before `app` itself is assigned) is safe.
+  const reactionRateLimiter: RateLimiter = {
+    consume: (key) => createRedisRateLimiter(app.redis, REACTION_RATE_LIMIT, REACTION_RATE_WINDOW_SECONDS).consume(key),
+  };
 
   // `app` is referenced inside checkRedis's closure before this statement
   // finishes - safe, because the closure body only runs later (on an actual
@@ -64,6 +74,10 @@ async function main() {
     },
     cards: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
+    publicComments: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+      reactionRateLimiter,
     },
     storage: {
       sessionHmacKey: env.SESSION_HMAC_KEY,

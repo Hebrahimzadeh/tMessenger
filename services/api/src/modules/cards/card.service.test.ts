@@ -145,8 +145,12 @@ function fakeCardRepo(opts: { spaceStatus?: SpaceStatus } = {}) {
           title: revision.title,
           body: revision.body,
           attachmentCount: [...attachments.values()].filter((a) => a.cardId === c.id).length,
+          reactionCount: 0,
         };
       });
+    },
+    async getSpaceHealthStatus() {
+      return null;
     },
   };
 

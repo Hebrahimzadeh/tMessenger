@@ -83,6 +83,10 @@ model User {
   cardsAuthored                   Card[]                   @relation("CardAuthor")
   cardRevisionsEdited             CardRevision[]           @relation("CardRevisionEditor")
   cardAttachmentsOwned            CardAttachment[]         @relation("CardAttachmentOwner")
+  cardCommentsAuthored            CardComment[]            @relation("CardCommentAuthor")
+  cardCommentRevisionsEdited      CardCommentRevision[]    @relation("CardCommentRevisionEditor")
+  cardReactions                   CardReaction[]           @relation("CardReactionUser")
+  cardPinsCreated                 CardPin[]                @relation("CardPinnedBy")
 
   @@index([status])
   @@map("users")
@@ -387,6 +391,7 @@ model Space {
   followers          SpaceFollower[]
   healthSnapshot     SpaceHealthSnapshot?
   cards              Card[]
+  cardPins           CardPin[]
 
   @@index([status])
   @@map("spaces")
@@ -611,6 +616,9 @@ model Card {
   semanticProfile CardSemanticProfile?
   attachments     CardAttachment[]
   events          CardEvent[]
+  comments        CardComment[]
+  reactions       CardReaction[]
+  pin             CardPin?
 
   @@index([spaceId, publishedAt])
   @@map("cards")
@@ -700,6 +708,105 @@ model CardEvent {
 
   @@index([cardId, createdAt])
   @@map("card_events")
+}
+
+enum CardCommentStatus {
+  VISIBLE
+  DELETED
+}
+
+/// A human public comment on a card - "thread عمومی". Deliberately a
+/// different table from CardEvent (the machine log): "system event با
+/// comment انسانی type مشترک نداشته باشد" - a system thread entry and a
+/// person's comment can never be confused because they are different
+/// entities, not two `type` values on one. `parentId` is a reply and is
+/// constrained to the same card by the service, never cross-card. Editing
+/// appends a CardCommentRevision (never mutates one); a soft delete flips
+/// `status` to DELETED and clears the rendered body from the view while
+/// every revision row and the audit trail stay intact.
+model CardComment {
+  id        String            @id @default(uuid()) @db.Uuid
+  cardId    String            @db.Uuid
+  authorId  String            @db.Uuid
+  parentId  String?           @db.Uuid
+  status    CardCommentStatus @default(VISIBLE)
+  createdAt DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime          @updatedAt @db.Timestamptz(6)
+  deletedAt DateTime?         @db.Timestamptz(6)
+
+  card      Card                  @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  author    User                  @relation("CardCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  parent    CardComment?          @relation("CardCommentReplies", fields: [parentId], references: [id], onDelete: Restrict)
+  replies   CardComment[]         @relation("CardCommentReplies")
+  revisions CardCommentRevision[]
+
+  @@index([cardId, createdAt])
+  @@index([parentId])
+  @@map("card_comments")
+}
+
+/// One immutable snapshot of a comment's text - "comment و revision را
+/// transactionally ذخیره کن". Every create and every edit inserts a row.
+model CardCommentRevision {
+  id             String   @id @default(uuid()) @db.Uuid
+  commentId      String   @db.Uuid
+  revisionNumber Int
+  body           String
+  editorId       String   @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  comment CardComment @relation(fields: [commentId], references: [id], onDelete: Restrict)
+  editor  User        @relation("CardCommentRevisionEditor", fields: [editorId], references: [id], onDelete: Restrict)
+
+  @@unique([commentId, revisionNumber])
+  @@map("card_comment_revisions")
+}
+
+enum CardReactionType {
+  SUPPORT
+  USEFUL
+  INTERESTED
+  CELEBRATE
+}
+
+/// A weak, capped signal - "reaction toggle idempotent با unique
+/// user/card/type". The `@@unique` makes a repeat of the same reaction a
+/// no-op (the toggle removes it instead of inflating a count), so
+/// popularity can never be gamed by re-clicking. Reactions feed only a
+/// small capped coefficient in card ranking, never a standalone sort.
+model CardReaction {
+  id        String           @id @default(uuid()) @db.Uuid
+  cardId    String           @db.Uuid
+  userId    String           @db.Uuid
+  type      CardReactionType
+  createdAt DateTime         @default(now()) @db.Timestamptz(6)
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  user User @relation("CardReactionUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([cardId, userId, type])
+  @@index([cardId])
+  @@map("card_reactions")
+}
+
+/// A creator/space-admin pin - "pin/unpin فقط creator/space-admin و دارای
+/// audit". `@@unique([spaceId, cardId])` means a card is pinned at most
+/// once; `position` orders a deliberately small set (the service caps the
+/// count). A suspended/removed space or a non-ACTIVE card cannot be pinned.
+model CardPin {
+  id         String   @id @default(uuid()) @db.Uuid
+  spaceId    String   @db.Uuid
+  cardId     String   @unique @db.Uuid
+  pinnedById String   @db.Uuid
+  position   Int
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  space    Space @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+  card     Card  @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  pinnedBy User  @relation("CardPinnedBy", fields: [pinnedById], references: [id], onDelete: Restrict)
+
+  @@index([spaceId, position])
+  @@map("card_pins")
 }
 
 /// Append-only. `targetId`/`actorId` are deliberately unconstrained (no FK) -

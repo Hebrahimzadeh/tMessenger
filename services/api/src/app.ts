@@ -9,6 +9,7 @@ import { authRoutes, type AuthRouteOptions } from './modules/auth/auth.route';
 import { mfaRoutes, type MfaRouteOptions } from './modules/auth/mfa.route';
 import { DevSmsSinkProvider } from './modules/auth/sms-provider';
 import { cardRoutes, type CardRouteOptions } from './modules/cards/card.route';
+import { publicCommentRoutes, type PublicCommentRouteOptions } from './modules/cards/public-comment.route';
 import { healthRoutes, type HealthRouteOptions } from './modules/health/health.route';
 import { identityClaimRoutes, type IdentityClaimRouteOptions } from './modules/identity-claim/identity-claim.route';
 import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
@@ -39,6 +40,7 @@ export interface BuildAppOptions extends FastifyServerOptions {
   spaces?: Partial<SpaceRouteOptions>;
   spaceSearch?: Partial<SpaceSearchRouteOptions>;
   cards?: Partial<CardRouteOptions>;
+  publicComments?: Partial<PublicCommentRouteOptions>;
   storage?: Partial<StorageRouteOptions>;
   /** Feeds CORS's allow-list and legal's URL resolution; server.ts always passes the real APP_ORIGIN. */
   appOrigin?: string;
@@ -58,8 +60,23 @@ const DEFAULT_APP_ORIGIN = 'http://localhost:4000';
  * (which alone is responsible for calling `.listen()`).
  */
 export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
-  const { health, legal, auth, profile, mfa, identityClaim, admin, spaces, spaceSearch, cards, storage, appOrigin, storageProvider, ...fastifyOpts } =
-    opts;
+  const {
+    health,
+    legal,
+    auth,
+    profile,
+    mfa,
+    identityClaim,
+    admin,
+    spaces,
+    spaceSearch,
+    cards,
+    publicComments,
+    storage,
+    appOrigin,
+    storageProvider,
+    ...fastifyOpts
+  } = opts;
   const resolvedAppOrigin = appOrigin ?? DEFAULT_APP_ORIGIN;
   const resolvedStorageProvider = storageProvider ?? new FakeStorageProvider();
 
@@ -155,6 +172,11 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
     storageProvider: resolvedStorageProvider,
     ...cards,
+  });
+  app.register(publicCommentRoutes, {
+    prefix: '/v1',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    ...publicComments,
   });
   app.register(storageRoutes, {
     prefix: '/v1/storage',

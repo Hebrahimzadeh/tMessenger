@@ -149,7 +149,11 @@ function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
         title: c.latestRevision.title,
         body: c.latestRevision.body,
         attachmentCount: attachmentRecordsFor(c.id).length,
+        reactionCount: 0,
       }));
+    },
+    async getSpaceHealthStatus() {
+      return null;
     },
   };
 
