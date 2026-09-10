@@ -1,4 +1,4 @@
-import type { CardAttachmentStatus } from '@taavon/database';
+import type { CardAttachmentStatus, ReservationState } from '@taavon/database';
 
 /**
  * The attachment lifecycle - "وضعیت پیوست PENDING|PROCESSING|READY|REJECTED".
@@ -40,4 +40,29 @@ export function deriveTitle(explicitTitle: string | undefined, body: string): st
   if (firstLine.length === 0) return EMPTY_TITLE_FALLBACK;
 
   return firstLine.length > TITLE_MAX_LENGTH ? firstLine.slice(0, TITLE_MAX_LENGTH).trimEnd() : firstLine;
+}
+
+/**
+ * The reservation lifecycle - "مرحلهٔ accept را حذف کن؛ reserve موفق فوراً
+ * RESERVED است". ACTIVE has no stored row (a card with no CardReservation
+ * *is* ACTIVE); RESERVED->ACTIVE is cancel (by the requester) or release
+ * (by the owner) and can happen more than once - only RESERVATION_CLOSED
+ * is terminal ("reactivation/EXPIRED صفر" - a closed reservation's row
+ * never transitions again; a new card is the only way forward, per Task
+ * 17's "duplicate card" action).
+ */
+const RESERVATION_TRANSITIONS: ReadonlyArray<readonly [ReservationState, ReservationState]> = [
+  ['ACTIVE', 'RESERVED'],
+  ['RESERVED', 'ACTIVE'],
+  ['RESERVED', 'IN_USE'],
+  ['RESERVED', 'RESERVATION_CLOSED'],
+  ['IN_USE', 'RESERVATION_CLOSED'],
+];
+
+export function canTransitionReservation(from: ReservationState, to: ReservationState): boolean {
+  return RESERVATION_TRANSITIONS.some(([f, t]) => f === from && t === to);
+}
+
+export function isTerminalReservationState(state: ReservationState): boolean {
+  return state === 'RESERVATION_CLOSED';
 }

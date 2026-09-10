@@ -79,6 +79,9 @@ async function main() {
       sessionHmacKey: env.SESSION_HMAC_KEY,
       reactionRateLimiter,
     },
+    reservations: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
     storage: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
     },

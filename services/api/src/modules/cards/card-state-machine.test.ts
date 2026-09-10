@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { canTransitionAttachment, isTerminalAttachmentStatus, deriveTitle } from './card-state-machine';
+import type { ReservationState } from '@taavon/database';
+import {
+  canTransitionAttachment,
+  canTransitionReservation,
+  deriveTitle,
+  isTerminalAttachmentStatus,
+  isTerminalReservationState,
+} from './card-state-machine';
 
 describe('canTransitionAttachment', () => {
   it('PENDING -> PROCESSING when the upload lands', () => {
@@ -64,5 +71,44 @@ describe('deriveTitle', () => {
 
   it('trims surrounding whitespace on the derived line', () => {
     expect(deriveTitle(undefined, '   عنوان با فاصله   \nبدنه')).toBe('عنوان با فاصله');
+  });
+});
+
+describe('canTransitionReservation ("جدول transition مجاز")', () => {
+  it('ACTIVE -> RESERVED is the only way in (no accept step)', () => {
+    expect(canTransitionReservation('ACTIVE', 'RESERVED')).toBe(true);
+  });
+
+  it('RESERVED can go back to ACTIVE (cancel or release) or forward to IN_USE or straight to closed', () => {
+    expect(canTransitionReservation('RESERVED', 'ACTIVE')).toBe(true);
+    expect(canTransitionReservation('RESERVED', 'IN_USE')).toBe(true);
+    expect(canTransitionReservation('RESERVED', 'RESERVATION_CLOSED')).toBe(true);
+  });
+
+  it('IN_USE can only close, never go back to RESERVED or ACTIVE', () => {
+    expect(canTransitionReservation('IN_USE', 'RESERVATION_CLOSED')).toBe(true);
+    expect(canTransitionReservation('IN_USE', 'RESERVED')).toBe(false);
+    expect(canTransitionReservation('IN_USE', 'ACTIVE')).toBe(false);
+  });
+
+  it('RESERVATION_CLOSED is terminal - every transition out of it is invalid ("reopen 409")', () => {
+    const targets: ReservationState[] = ['ACTIVE', 'RESERVED', 'IN_USE', 'RESERVATION_CLOSED'];
+    for (const to of targets) {
+      expect(canTransitionReservation('RESERVATION_CLOSED', to)).toBe(false);
+    }
+  });
+
+  it('never skips a step: ACTIVE cannot jump straight to IN_USE or RESERVATION_CLOSED', () => {
+    expect(canTransitionReservation('ACTIVE', 'IN_USE')).toBe(false);
+    expect(canTransitionReservation('ACTIVE', 'RESERVATION_CLOSED')).toBe(false);
+  });
+});
+
+describe('isTerminalReservationState', () => {
+  it('only RESERVATION_CLOSED is terminal', () => {
+    expect(isTerminalReservationState('RESERVATION_CLOSED')).toBe(true);
+    expect(isTerminalReservationState('ACTIVE')).toBe(false);
+    expect(isTerminalReservationState('RESERVED')).toBe(false);
+    expect(isTerminalReservationState('IN_USE')).toBe(false);
   });
 });

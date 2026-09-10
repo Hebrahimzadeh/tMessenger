@@ -10,6 +10,7 @@ import { mfaRoutes, type MfaRouteOptions } from './modules/auth/mfa.route';
 import { DevSmsSinkProvider } from './modules/auth/sms-provider';
 import { cardRoutes, type CardRouteOptions } from './modules/cards/card.route';
 import { publicCommentRoutes, type PublicCommentRouteOptions } from './modules/cards/public-comment.route';
+import { reservationRoutes, type ReservationRouteOptions } from './modules/cards/reservation.route';
 import { healthRoutes, type HealthRouteOptions } from './modules/health/health.route';
 import { identityClaimRoutes, type IdentityClaimRouteOptions } from './modules/identity-claim/identity-claim.route';
 import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
@@ -41,6 +42,7 @@ export interface BuildAppOptions extends FastifyServerOptions {
   spaceSearch?: Partial<SpaceSearchRouteOptions>;
   cards?: Partial<CardRouteOptions>;
   publicComments?: Partial<PublicCommentRouteOptions>;
+  reservations?: Partial<ReservationRouteOptions>;
   storage?: Partial<StorageRouteOptions>;
   /** Feeds CORS's allow-list and legal's URL resolution; server.ts always passes the real APP_ORIGIN. */
   appOrigin?: string;
@@ -72,6 +74,7 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     spaceSearch,
     cards,
     publicComments,
+    reservations,
     storage,
     appOrigin,
     storageProvider,
@@ -177,6 +180,11 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     prefix: '/v1',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
     ...publicComments,
+  });
+  app.register(reservationRoutes, {
+    prefix: '/v1',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    ...reservations,
   });
   app.register(storageRoutes, {
     prefix: '/v1/storage',

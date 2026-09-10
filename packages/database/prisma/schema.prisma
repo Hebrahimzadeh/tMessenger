@@ -87,6 +87,9 @@ model User {
   cardCommentRevisionsEdited      CardCommentRevision[]    @relation("CardCommentRevisionEditor")
   cardReactions                   CardReaction[]           @relation("CardReactionUser")
   cardPinsCreated                 CardPin[]                @relation("CardPinnedBy")
+  cardReservationsOwned           CardReservation[]        @relation("CardReservationOwner")
+  cardReservationsMade            CardReservation[]        @relation("CardReservationReserver")
+  conversationMemberships         ConversationMember[]     @relation("ConversationMemberUser")
 
   @@index([status])
   @@map("users")
@@ -619,6 +622,7 @@ model Card {
   comments        CardComment[]
   reactions       CardReaction[]
   pin             CardPin?
+  reservation     CardReservation?
 
   @@index([spaceId, publishedAt])
   @@map("cards")
@@ -807,6 +811,140 @@ model CardPin {
 
   @@index([spaceId, position])
   @@map("card_pins")
+}
+
+enum ReservationState {
+  ACTIVE
+  RESERVED
+  IN_USE
+  RESERVATION_CLOSED
+}
+
+enum ReservationCloseReason {
+  RETURNED
+  COMPLETED
+  TIME_ENDED
+  OWNER_CLOSED
+}
+
+/// A card's reservation lifecycle - "مرحلهٔ accept را حذف کن؛ reserve موفق
+/// فوراً RESERVED است". `@@unique(cardId)` means at most one row ever exists
+/// per card, created lazily on the *first* reserve attempt (a card with no
+/// row is the implicit ACTIVE/available state - see reservation.service.ts).
+/// That same unique constraint is what makes two simultaneous first-reserves
+/// safe: only one `create` can win, the other gets a constraint violation.
+/// Every later transition (cancel/release/mark-in-use/close) is instead a
+/// version-column compare-and-swap `UPDATE ... WHERE version = :expected`,
+/// so a card can safely cycle ACTIVE -> RESERVED -> ACTIVE (via cancel or
+/// release) more than once - only RESERVATION_CLOSED is terminal
+/// ("reactivation/EXPIRED صفر" - once closed, this exact row never changes
+/// state again; a similar-but-new card is Task 17's own separate action).
+model CardReservation {
+  id             String                  @id @default(uuid()) @db.Uuid
+  cardId         String                  @unique @db.Uuid
+  ownerId        String                  @db.Uuid
+  reserverId     String?                 @db.Uuid
+  state          ReservationState        @default(RESERVED)
+  version        Int                     @default(0)
+  conversationId String?                 @db.Uuid
+  releaseReason  String?
+  closeReason    ReservationCloseReason?
+  reservedAt     DateTime                @default(now()) @db.Timestamptz(6)
+  inUseAt        DateTime?               @db.Timestamptz(6)
+  closedAt       DateTime?               @db.Timestamptz(6)
+  updatedAt      DateTime                @updatedAt @db.Timestamptz(6)
+
+  card     Card  @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  owner    User  @relation("CardReservationOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  reserver User? @relation("CardReservationReserver", fields: [reserverId], references: [id], onDelete: Restrict)
+
+  @@map("card_reservations")
+}
+
+enum ConversationKind {
+  DIRECT
+}
+
+/// A minimal conversation shell - Task 19 adds real messages on top. Only
+/// `DIRECT` exists for now; `pairKey` (the two member ids, sorted and
+/// joined) is what makes `getOrCreateDirectConversation` idempotent - the
+/// same two people always resolve to the same one conversation, reused
+/// across every reservation they ever share, found via a single unique
+/// lookup rather than a query over ConversationMember rows.
+model Conversation {
+  id        String           @id @default(uuid()) @db.Uuid
+  kind      ConversationKind @default(DIRECT)
+  pairKey   String?          @unique
+  createdAt DateTime         @default(now()) @db.Timestamptz(6)
+
+  members ConversationMember[]
+
+  @@map("conversations")
+}
+
+model ConversationMember {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @db.Uuid
+  userId         String   @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  user         User         @relation("ConversationMemberUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([conversationId, userId])
+  @@map("conversation_members")
+}
+
+/// Deduplicates a retried mutating request - "header Idempotency-Key
+/// اجباری". Scoped by (scope, actorId, key): the same literal key string
+/// means different things for different actions or different callers, so
+/// scope+actor are part of the uniqueness, not just the client-supplied
+/// key. Only a *successful* response is ever cached (see
+/// reservation.service.ts's `withIdempotency`) - a request that genuinely
+/// failed can be retried under the same key rather than replaying the
+/// failure forever.
+model IdempotencyRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  scope          String
+  actorId        String   @db.Uuid
+  key            String
+  responseStatus Int
+  responseBody   Json
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([scope, actorId, key])
+  @@map("idempotency_records")
+}
+
+enum AwarenessEventType {
+  PRODUCED
+  MEANINGFUL_VIEW
+  PUBLIC_CONTRIBUTION
+  RESERVED
+  PRIVATE_CHAT_STARTED
+  APPLIED
+  RESERVATION_CLOSED
+}
+
+/// The full vocabulary is Task 18's ("رخداد، مشارکت‌های من و dashboard قیف
+/// آگاهی"); this task only ever writes RESERVED / PRIVATE_CHAT_STARTED /
+/// RESERVATION_CLOSED, one per reservation transition - "هر transition
+/// CardEvent و AwarenessEvent بسازد". Deliberately minimal now - "فقط event
+/// label، زمان و deep-link نگه دار و category/status مشتق نکن" (Task 18's
+/// own words) - no private text, no derived status. `idempotencyKey` makes
+/// a transition's event write-once even if the surrounding transaction were
+/// ever retried outside the request-level Idempotency-Key cache.
+model AwarenessEvent {
+  id             String             @id @default(uuid()) @db.Uuid
+  type           AwarenessEventType
+  actorId        String             @db.Uuid
+  subjectId      String             @db.Uuid
+  deepLink       String?
+  idempotencyKey String             @unique
+  createdAt      DateTime           @default(now()) @db.Timestamptz(6)
+
+  @@index([actorId, createdAt])
+  @@map("awareness_events")
 }
 
 /// Append-only. `targetId`/`actorId` are deliberately unconstrained (no FK) -
