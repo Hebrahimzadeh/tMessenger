@@ -31,27 +31,29 @@ export function createPrismaSpaceHealthRepository(prisma: PrismaClient): SpaceHe
     async gatherSignals(spaceId) {
       const space = await prisma.space.findUniqueOrThrow({ where: { id: spaceId }, select: { publishedAt: true } });
 
-      const [memberships, roles, activeRoles, latestVersion] = await Promise.all([
+      const [memberships, roles, activeRoles, latestVersion, cardCount, latestCard] = await Promise.all([
         prisma.spaceRoleMembership.findMany({ where: { spaceId }, distinct: ['userId'], select: { userId: true, createdAt: true } }),
         prisma.spaceParticipationRole.count({ where: { spaceId } }),
         prisma.spaceParticipationRole.count({ where: { spaceId, memberships: { some: {} } } }),
         prisma.spaceDefinitionVersion.findFirst({ where: { spaceId }, orderBy: { versionNumber: 'desc' }, select: { createdAt: true } }),
+        // "کارت‌های نمونه ... هیچ counter را افزایش نمی‌دهند" - only real
+        // ACTIVE cards count; cardHints on the definition version is opaque
+        // descriptive JSON and is never queried here. Task 14 added the Card
+        // model, so this signal (stubbed at 0 in Task 13) is now real.
+        prisma.card.count({ where: { spaceId, status: 'ACTIVE' } }),
+        prisma.card.findFirst({ where: { spaceId, status: 'ACTIVE' }, orderBy: { publishedAt: 'desc' }, select: { publishedAt: true } }),
       ]);
 
-      // "کارت‌های نمونه، reaction و ترافیک bot هیچ counter را افزایش
-      // نمی‌دهند" - not merely a policy here: cardCount is a fixed 0
-      // because no real Card model exists yet (Task 14+; cardHints is
-      // opaque descriptive JSON on the definition version, never queried
-      // for a count), and nothing below ever reads a reaction or view
-      // table, because none exist either (Task 15/analytics). Real
-      // contributor/role signals below come exclusively from
-      // SpaceRoleMembership - a genuine role join, the only kind of
-      // participation this codebase can actually verify happened today.
-      const cardCount = 0;
+      // "reaction و ترافیک bot هیچ counter را افزایش نمی‌دهند" - nothing
+      // below reads a reaction or view table because none exist yet
+      // (Task 15/analytics). Real contributor/role signals come exclusively
+      // from SpaceRoleMembership - a genuine role join, the only kind of
+      // participation this codebase can verify happened.
 
       const activityTimestamps = [
         space.publishedAt,
         latestVersion?.createdAt ?? null,
+        latestCard?.publishedAt ?? null,
         ...memberships.map((m) => m.createdAt),
       ].filter((d): d is Date => d !== null);
       const lastActivityAt = activityTimestamps.length > 0 ? new Date(Math.max(...activityTimestamps.map((d) => d.getTime()))) : null;

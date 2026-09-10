@@ -8,12 +8,16 @@ import { adminRoutes, type AdminRouteOptions } from './modules/admin/admin.route
 import { authRoutes, type AuthRouteOptions } from './modules/auth/auth.route';
 import { mfaRoutes, type MfaRouteOptions } from './modules/auth/mfa.route';
 import { DevSmsSinkProvider } from './modules/auth/sms-provider';
+import { cardRoutes, type CardRouteOptions } from './modules/cards/card.route';
 import { healthRoutes, type HealthRouteOptions } from './modules/health/health.route';
 import { identityClaimRoutes, type IdentityClaimRouteOptions } from './modules/identity-claim/identity-claim.route';
 import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
 import { profileRoutes, type ProfileRouteOptions } from './modules/profile/profile.route';
 import { spaceSearchRoutes, type SpaceSearchRouteOptions } from './modules/spaces/space-search.route';
 import { spaceRoutes, type SpaceRouteOptions } from './modules/spaces/space.route';
+import { storageRoutes, type StorageRouteOptions } from './modules/storage/storage.route';
+import { FakeStorageProvider } from './modules/storage/fake-storage-provider';
+import type { StorageProvider } from './modules/storage/storage-provider';
 import { apiError } from './lib/api-error';
 
 interface PackageJson {
@@ -34,8 +38,16 @@ export interface BuildAppOptions extends FastifyServerOptions {
   admin?: Partial<AdminRouteOptions>;
   spaces?: Partial<SpaceRouteOptions>;
   spaceSearch?: Partial<SpaceSearchRouteOptions>;
+  cards?: Partial<CardRouteOptions>;
+  storage?: Partial<StorageRouteOptions>;
   /** Feeds CORS's allow-list and legal's URL resolution; server.ts always passes the real APP_ORIGIN. */
   appOrigin?: string;
+  /**
+   * Object storage for card media. Defaults to an in-memory fake so
+   * `buildApp()` stays side-effect-free for tests; `server.ts` always
+   * passes the real S3-backed provider.
+   */
+  storageProvider?: StorageProvider;
 }
 
 const DEFAULT_APP_ORIGIN = 'http://localhost:4000';
@@ -46,8 +58,10 @@ const DEFAULT_APP_ORIGIN = 'http://localhost:4000';
  * (which alone is responsible for calling `.listen()`).
  */
 export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
-  const { health, legal, auth, profile, mfa, identityClaim, admin, spaces, spaceSearch, appOrigin, ...fastifyOpts } = opts;
+  const { health, legal, auth, profile, mfa, identityClaim, admin, spaces, spaceSearch, cards, storage, appOrigin, storageProvider, ...fastifyOpts } =
+    opts;
   const resolvedAppOrigin = appOrigin ?? DEFAULT_APP_ORIGIN;
+  const resolvedStorageProvider = storageProvider ?? new FakeStorageProvider();
 
   const app = Fastify({
     logger: true,
@@ -135,6 +149,18 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     prefix: '/v1/spaces',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
     ...spaceSearch,
+  });
+  app.register(cardRoutes, {
+    prefix: '/v1',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    storageProvider: resolvedStorageProvider,
+    ...cards,
+  });
+  app.register(storageRoutes, {
+    prefix: '/v1/storage',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    storageProvider: resolvedStorageProvider,
+    ...storage,
   });
 
   return app;

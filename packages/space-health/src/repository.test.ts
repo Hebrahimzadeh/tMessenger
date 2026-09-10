@@ -36,6 +36,9 @@ describe.skipIf(!databaseAvailable)('SpaceHealthRepository: real Postgres', () =
 
   afterEach(async () => {
     await getPrisma().spaceHealthSnapshot.deleteMany({ where: { spaceId: { in: createdSpaceIds } } });
+    const cardIds = (await getPrisma().card.findMany({ where: { spaceId: { in: createdSpaceIds } }, select: { id: true } })).map((c) => c.id);
+    await getPrisma().cardRevision.deleteMany({ where: { cardId: { in: cardIds } } });
+    await getPrisma().card.deleteMany({ where: { id: { in: cardIds } } });
     await getPrisma().spaceRoleMembership.deleteMany({ where: { spaceId: { in: createdSpaceIds } } });
     await getPrisma().spaceParticipationRole.deleteMany({ where: { spaceId: { in: createdSpaceIds } } });
     await getPrisma().spaceDefinitionVersion.deleteMany({ where: { spaceId: { in: createdSpaceIds } } });
@@ -94,6 +97,24 @@ describe.skipIf(!databaseAvailable)('SpaceHealthRepository: real Postgres', () =
     // The card hint above exists purely as descriptive JSON - gatherSignals
     // never reads cardHints at all, so cardCount is unaffected by it.
     expect(signals.cardCount).toBe(0);
+  });
+
+  it('gatherSignals counts real ACTIVE cards and folds the latest card into lastActivityAt', async () => {
+    const { spaceId } = await createSpace({ published: true });
+
+    const card = await getPrisma().card.create({
+      data: { spaceId, authorId: userId, kind: 'AWARENESS', status: 'ACTIVE', publishedAt: new Date('2030-01-01T00:00:00Z') },
+    });
+    await getPrisma().cardRevision.create({
+      data: { cardId: card.id, revisionNumber: 1, title: 'کارت واقعی', body: 'متن', editorId: userId },
+    });
+    await getPrisma().card.create({
+      data: { spaceId, authorId: userId, kind: 'AWARENESS', status: 'ARCHIVED', publishedAt: new Date('2029-01-01T00:00:00Z') },
+    });
+
+    const signals = await healthRepo.gatherSignals(spaceId);
+    expect(signals.cardCount).toBe(1);
+    expect(signals.lastActivityAt?.toISOString()).toBe('2030-01-01T00:00:00.000Z');
   });
 
   it('upsertSnapshot is idempotent - running it twice for the same space updates the one row, not creating a second', async () => {

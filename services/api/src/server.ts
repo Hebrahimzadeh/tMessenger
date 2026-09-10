@@ -32,6 +32,7 @@ async function main() {
   // without needing that same forward-reference.
   const app = buildApp({
     appOrigin: env.APP_ORIGIN,
+    storageProvider: storage,
     auth: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
       phoneEncryptionKey: env.PHONE_ENCRYPTION_KEY,
@@ -59,6 +60,12 @@ async function main() {
       sessionHmacKey: env.SESSION_HMAC_KEY,
     },
     spaceSearch: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
+    cards: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
+    storage: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
     },
     health: {

@@ -80,6 +80,9 @@ model User {
   spaceRoleMemberships            SpaceRoleMembership[]    @relation("SpaceRoleMembershipUser")
   spaceInvitesCreated             SpaceInvite[]            @relation("SpaceInviteCreatedBy")
   spaceFollowing                  SpaceFollower[]          @relation("SpaceFollowerUser")
+  cardsAuthored                   Card[]                   @relation("CardAuthor")
+  cardRevisionsEdited             CardRevision[]           @relation("CardRevisionEditor")
+  cardAttachmentsOwned            CardAttachment[]         @relation("CardAttachmentOwner")
 
   @@index([status])
   @@map("users")
@@ -383,6 +386,7 @@ model Space {
   invites            SpaceInvite[]
   followers          SpaceFollower[]
   healthSnapshot     SpaceHealthSnapshot?
+  cards              Card[]
 
   @@index([status])
   @@map("spaces")
@@ -546,6 +550,156 @@ model SpaceHealthSnapshot {
   space Space @relation(fields: [spaceId], references: [id], onDelete: Restrict)
 
   @@map("space_health_snapshots")
+}
+
+// Task 14: awareness-first multimedia cards. New migration, additive only.
+
+/// Internal, correctable classification - "این kind داخلی و قابل اصلاح
+/// است؛ user مجبور به انتخاب نیست". A card is always created AWARENESS
+/// unless the author explicitly picks another; CardSemanticProfile keeps a
+/// separate rule-based guess that never silently overrides the author's.
+enum CardKind {
+  AWARENESS
+  OBSERVATION
+  REUSABLE_RESOURCE
+  CONSUMABLE_RESOURCE
+  REQUEST
+  SERVICE
+  PARTICIPATION
+  EVENT
+}
+
+enum CardStatus {
+  ACTIVE
+  ARCHIVED
+  REMOVED
+}
+
+enum CardAttachmentKind {
+  IMAGE
+  AUDIO
+  VIDEO
+  FILE
+  LINK
+  APPROXIMATE_LOCATION
+}
+
+enum CardAttachmentStatus {
+  PENDING
+  PROCESSING
+  READY
+  REJECTED
+}
+
+/// The mutable pointer for a card. Its text content lives entirely in
+/// CardRevision rows (every edit is a new immutable revision - "revision
+/// immutable"); "current revision" is simply the highest revisionNumber,
+/// resolved by the repository, same as Space's own current version.
+model Card {
+  id          String     @id @default(uuid()) @db.Uuid
+  spaceId     String     @db.Uuid
+  authorId    String     @db.Uuid
+  kind        CardKind   @default(AWARENESS)
+  status      CardStatus @default(ACTIVE)
+  publishedAt DateTime   @default(now()) @db.Timestamptz(6)
+  createdAt   DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime   @updatedAt @db.Timestamptz(6)
+
+  space           Space                @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+  author          User                 @relation("CardAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  revisions       CardRevision[]
+  semanticProfile CardSemanticProfile?
+  attachments     CardAttachment[]
+  events          CardEvent[]
+
+  @@index([spaceId, publishedAt])
+  @@map("cards")
+}
+
+/// One immutable snapshot of a card's text - every edit inserts a new row.
+/// `title` is derived from `body` when the author does not supply one (see
+/// cards/card.service.ts's deriveTitle).
+model CardRevision {
+  id             String   @id @default(uuid()) @db.Uuid
+  cardId         String   @db.Uuid
+  revisionNumber Int
+  title          String
+  body           String
+  editorId       String   @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  card   Card @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  editor User @relation("CardRevisionEditor", fields: [editorId], references: [id], onDelete: Restrict)
+
+  @@unique([cardId, revisionNumber])
+  @@map("card_revisions")
+}
+
+/// The "گونهٔ استنباطی" - a rule-based (Task 25 replaces it with AI)
+/// classification kept alongside, never in place of, the author's own
+/// `Card.kind`. Recomputed on every edit.
+model CardSemanticProfile {
+  id           String   @id @default(uuid()) @db.Uuid
+  cardId       String   @unique @db.Uuid
+  inferredKind CardKind
+  confidence   Float
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Restrict)
+
+  @@map("card_semantic_profiles")
+}
+
+/// `objectKey`/`contentType`/`sizeBytes`/`checksumSha256` are set by the
+/// upload route once real bytes land; `linkUrl`/`locationLabel`/`approxLat`/
+/// `approxLng` are for the two non-file kinds (LINK, APPROXIMATE_LOCATION),
+/// stored verbatim with no server-side URL fetch. `cardId` is null between
+/// upload-intent and being attached to a card. Only a READY attachment is
+/// ever shown on a card or gets a signed read URL; a REJECTED one never
+/// does.
+model CardAttachment {
+  id              String               @id @default(uuid()) @db.Uuid
+  cardId          String?              @db.Uuid
+  ownerId         String               @db.Uuid
+  kind            CardAttachmentKind
+  status          CardAttachmentStatus @default(PENDING)
+  objectKey       String?
+  contentType     String?
+  sizeBytes       Int?
+  checksumSha256  String?
+  linkUrl         String?
+  locationLabel   String?
+  approxLat       Float?
+  approxLng       Float?
+  rejectionReason String?
+  createdAt       DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime             @updatedAt @db.Timestamptz(6)
+
+  card  Card? @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  owner User  @relation("CardAttachmentOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([cardId])
+  @@index([ownerId, status])
+  @@map("card_attachments")
+}
+
+/// Append-only per-card event log (card.created / card.revised / ...). A
+/// separate concern from the generic OutboxEvent, which is also written in
+/// the same transaction for async fan-out - "edit revision و outbox event
+/// بسازد".
+model CardEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  cardId    String   @db.Uuid
+  eventType String
+  actorId   String?  @db.Uuid
+  payload   Json?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Restrict)
+
+  @@index([cardId, createdAt])
+  @@map("card_events")
 }
 
 /// Append-only. `targetId`/`actorId` are deliberately unconstrained (no FK) -
