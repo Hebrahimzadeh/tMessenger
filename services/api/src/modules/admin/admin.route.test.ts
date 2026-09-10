@@ -7,6 +7,24 @@ import { MFA_TOKEN_COOKIE, signMfaToken } from '../auth/mfa-token';
 import type { RoleAssignmentRepository } from '../auth/role-assignment.repository';
 import type { IdentityClaimRepository } from '../identity-claim/identity-claim.service';
 import type { RoleKey } from '@taavon/database';
+import type { AwarenessAggregationRepository } from '@taavon/awareness';
+
+function fakeAwarenessAggregationRepo(
+  days: Array<{ date: Date; producedCount: number; meaningfulViewCount: number; publicContributionCount: number; appliedCount: number; privateChatStartedCount: number; reservationClosedCount: number; computedAt: Date }> = []
+): AwarenessAggregationRepository {
+  return {
+    async listEventTypesForDay() {
+      return [];
+    },
+    async upsertDailyAggregate() {},
+    async getDailyAggregate() {
+      return days[0] ?? null;
+    },
+    async listRecentAggregates() {
+      return days;
+    },
+  };
+}
 
 const SESSION_HMAC_KEY = 'test-only-session-hmac-key';
 const ENCRYPTION_KEY = 'test-only-claim-encryption-key';
@@ -57,7 +75,8 @@ function fakeClaimRepo(seed: Record<string, { status: 'PENDING' | 'VERIFIED' | '
 function buildApp(
   roleRepo: RoleAssignmentRepository,
   claimRepo: IdentityClaimRepository,
-  audit = vi.fn(async (_prisma: unknown, _event: unknown) => undefined)
+  audit = vi.fn(async (_prisma: unknown, _event: unknown) => undefined),
+  awarenessAggregationRepository: AwarenessAggregationRepository = fakeAwarenessAggregationRepo()
 ) {
   const app = Fastify();
   app.register(cookie);
@@ -68,6 +87,7 @@ function buildApp(
     roleAssignmentRepository: roleRepo,
     identityClaimRepository: claimRepo,
     audit,
+    awarenessAggregationRepository,
   });
   return { app, audit };
 }
@@ -266,6 +286,54 @@ describe('POST /admin/role-assignments', () => {
       payload: { userId: '33333333-3333-4333-8333-333333333333', role: 'MODERATOR' },
     });
     expect(response.statusCode).toBe(403);
+    await app.close();
+  });
+});
+
+describe('GET /admin/metrics/awareness', () => {
+  const SUPERADMIN_ID = '11111111-1111-4111-8111-111111111111';
+
+  it('requires SUPERADMIN + MFA', async () => {
+    const { repo } = fakeRoleRepo({ [SUPERADMIN_ID]: [] });
+    const { repo: claimRepo } = fakeClaimRepo();
+    const { app } = buildApp(repo, claimRepo);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/metrics/awareness',
+      cookies: { [ACCESS_TOKEN_COOKIE]: signAccessToken(SUPERADMIN_ID, SESSION_HMAC_KEY) }, // no MFA cookie
+    });
+    expect(response.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it('returns only pre-aggregated daily counts - no raw id, no per-human score, anywhere in the response', async () => {
+    const { repo } = fakeRoleRepo({ [SUPERADMIN_ID]: ['SUPERADMIN'] });
+    const { repo: claimRepo } = fakeClaimRepo();
+    const awareness = fakeAwarenessAggregationRepo([
+      {
+        date: new Date('2031-01-01T00:00:00.000Z'),
+        producedCount: 3,
+        meaningfulViewCount: 10,
+        publicContributionCount: 4,
+        appliedCount: 1,
+        privateChatStartedCount: 2,
+        reservationClosedCount: 1,
+        computedAt: new Date('2031-01-02T00:00:00.000Z'),
+      },
+    ]);
+    const { app } = buildApp(repo, claimRepo, undefined, awareness);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/metrics/awareness',
+      cookies: superadminCookies(SUPERADMIN_ID),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.days).toEqual([
+      { date: '2031-01-01', producedCount: 3, meaningfulViewCount: 10, publicContributionCount: 4, appliedCount: 1, privateChatStartedCount: 2, reservationClosedCount: 1 },
+    ]);
+    expect(JSON.stringify(body)).not.toContain('userId');
+    expect(JSON.stringify(body)).not.toContain('score');
     await app.close();
   });
 });

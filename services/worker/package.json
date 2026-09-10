@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@taavon/awareness": "*",
     "@taavon/database": "*",
     "@taavon/space-health": "*",
     "bullmq": "^5.34.0",

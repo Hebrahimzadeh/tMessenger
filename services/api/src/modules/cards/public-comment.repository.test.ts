@@ -37,6 +37,7 @@ describe.skipIf(!databaseAvailable)('CommentRepository: real Postgres', () => {
 
   afterEach(async () => {
     const commentIds = (await getPrisma().cardComment.findMany({ where: { cardId }, select: { id: true } })).map((c) => c.id);
+    await getPrisma().awarenessEvent.deleteMany({ where: { actorId: { in: [authorId, strangerId] } } });
     await getPrisma().auditEvent.deleteMany({ where: { targetType: 'CardComment', targetId: { in: commentIds } } });
     await getPrisma().cardCommentRevision.deleteMany({ where: { commentId: { in: commentIds } } });
     // Replies point back at their parent (Restrict) - clear children first.

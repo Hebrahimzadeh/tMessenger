@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '@taavon/database';
 import type { SpaceCardHint } from '@taavon/contracts';
+import { logAwarenessEvent } from '../../lib/awareness-events';
 import { normalizePersianLetters } from '../../lib/persian-text';
 import type { SpaceRecord, SpaceRepository, SpaceRoleInputRecord } from './space.service';
 
@@ -201,10 +202,24 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
     },
 
     async joinRole(spaceId, userId, roleId) {
-      await prisma.spaceRoleMembership.upsert({
-        where: { userId_roleId: { userId, roleId } },
-        create: { spaceId, userId, roleId },
-        update: {},
+      await prisma.$transaction(async (tx) => {
+        await tx.spaceRoleMembership.upsert({
+          where: { userId_roleId: { userId, roleId } },
+          create: { spaceId, userId, roleId },
+          update: {},
+        });
+        // "applied" - joining a participation role is this codebase's own
+        // form of applying to help. Idempotency-keyed per (space, user,
+        // role) so re-joining the same role after a leave/rejoin cycle
+        // logs the milestone only once, matching the upsert's own
+        // create-or-no-op semantics above.
+        await logAwarenessEvent(tx, {
+          type: 'APPLIED',
+          actorId: userId,
+          subjectId: spaceId,
+          deepLink: `/spaces/${spaceId}`,
+          idempotencyKey: `role-membership:${spaceId}:${userId}:${roleId}:APPLIED`,
+        });
       });
     },
 

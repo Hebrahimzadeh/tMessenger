@@ -3,11 +3,16 @@ import type { FastifyInstance } from 'fastify';
 import {
   assignRoleBodySchema,
   assignRoleResponseSchema,
+  awarenessMetricsResponseSchema,
   identityClaimDetailResponseSchema,
   identityClaimListResponseSchema,
   reviewIdentityClaimBodySchema,
 } from '@taavon/contracts';
 import type { Prisma, PrismaClient } from '@taavon/database';
+import {
+  createPrismaAwarenessAggregationRepository,
+  type AwarenessAggregationRepository,
+} from '@taavon/awareness';
 import { apiError } from '../../lib/api-error';
 import { requireRole } from '../../plugins/authorize';
 import { createPrismaRoleAssignmentRepository, type RoleAssignmentRepository } from '../auth/role-assignment.repository';
@@ -50,8 +55,11 @@ export interface AdminRouteOptions {
   /** Test seams. */
   roleAssignmentRepository?: RoleAssignmentRepository;
   identityClaimRepository?: IdentityClaimRepository;
+  awarenessAggregationRepository?: AwarenessAggregationRepository;
   audit?: (prisma: PrismaClient, event: AdminAuditEvent) => Promise<void>;
 }
+
+const AWARENESS_METRICS_DAYS = 30;
 
 export async function adminRoutes(app: FastifyInstance, opts: AdminRouteOptions) {
   // Resolved per-request, not at plugin-registration time - same reason as
@@ -62,6 +70,9 @@ export async function adminRoutes(app: FastifyInstance, opts: AdminRouteOptions)
   }
   function claimRepo(): IdentityClaimRepository {
     return opts.identityClaimRepository ?? createPrismaIdentityClaimRepository(app.db);
+  }
+  function awarenessAggregationRepo(): AwarenessAggregationRepository {
+    return opts.awarenessAggregationRepository ?? createPrismaAwarenessAggregationRepository(app.db);
   }
   const audit = opts.audit ?? defaultAudit;
   const authorizeDeps = () => ({ sessionHmacKey: opts.sessionHmacKey, roleRepo: roleRepo() });
@@ -147,5 +158,28 @@ export async function adminRoutes(app: FastifyInstance, opts: AdminRouteOptions)
       }
       throw err;
     }
+  });
+
+  // "dashboard فقط آمار تجمیعی و بدون score انسان نمایش دهد" - this route
+  // only ever reads the pre-computed daily aggregates (see @taavon/awareness);
+  // it never queries AwarenessEvent directly, so there is no raw actor/
+  // subject id or per-human score anywhere in this response even in
+  // principle, not merely by omission.
+  app.get('/metrics/awareness', async (request, reply) => {
+    const authorized = await requireRole('SUPERADMIN')(request, reply, authorizeDeps());
+    if (!authorized) return;
+
+    const days = await awarenessAggregationRepo().listRecentAggregates(AWARENESS_METRICS_DAYS);
+    return awarenessMetricsResponseSchema.parse({
+      days: days.map((day) => ({
+        date: day.date.toISOString().slice(0, 10),
+        producedCount: day.producedCount,
+        meaningfulViewCount: day.meaningfulViewCount,
+        publicContributionCount: day.publicContributionCount,
+        appliedCount: day.appliedCount,
+        privateChatStartedCount: day.privateChatStartedCount,
+        reservationClosedCount: day.reservationClosedCount,
+      })),
+    });
   });
 }

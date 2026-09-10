@@ -41,6 +41,7 @@ describe.skipIf(!databaseAvailable)('SpaceRepository: real Postgres', () => {
 
   afterEach(async () => {
     // Children first - Space's own FKs are all onDelete: Restrict.
+    await getPrisma().awarenessEvent.deleteMany({ where: { actorId: { in: [userId, otherUserId] } } });
     await getPrisma().spaceRoleMembership.deleteMany({ where: { user: { id: { in: [userId, otherUserId] } } } });
     await getPrisma().spaceInvite.deleteMany({ where: { createdBy: { in: [userId, otherUserId] } } });
     await getPrisma().roleAssignment.deleteMany({ where: { userId: { in: [userId, otherUserId] }, scopeType: 'SPACE' } });

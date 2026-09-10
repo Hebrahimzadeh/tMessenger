@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '@taavon/database';
 import type { CardLinkInput, CardLocationInput } from '@taavon/contracts';
+import { logAwarenessEvent } from '../../lib/awareness-events';
 import type { CardAttachmentRecord, CardListRow, CardRecord, CardRepository } from './card.service';
 import type { AttachmentRecord, AttachmentRepository } from './attachment.service';
 
@@ -161,6 +162,13 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
             eventType: 'card.created',
             payload: { cardId: card.id, spaceId: input.spaceId, authorId: input.authorId },
           },
+        });
+        await logAwarenessEvent(tx, {
+          type: 'PRODUCED',
+          actorId: input.authorId,
+          subjectId: card.id,
+          deepLink: `/cards/${card.id}`,
+          idempotencyKey: `card:${card.id}:PRODUCED`,
         });
 
         return { id: card.id };

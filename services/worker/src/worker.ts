@@ -3,6 +3,7 @@ import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { parseWorkerEnv } from './config/env';
 import { processSpaceHealthJob } from './jobs/space-health';
+import { processAwarenessAggregationJob } from './jobs/awareness-aggregation';
 
 const env = parseWorkerEnv();
 
@@ -62,3 +63,43 @@ worker.on('failed', (job, err) => {
 await scheduleDailyJob();
 // eslint-disable-next-line no-console -- see the completed handler's own comment above.
 console.log('[worker] space-health worker started; daily job scheduled for 03:00');
+
+// --- awareness aggregation: a second, independent queue/worker/scheduler ---
+// "aggregation روزانه" (Task 18) - kept on its own queue rather than
+// folded into the space-health job so the two remain independently
+// retryable/observable (a failure in one never blocks or is masked by the
+// other), the same reasoning BullMQ's own docs give for one queue per job
+// kind. Scheduled 30 minutes after space-health, purely to stagger load;
+// there is no real dependency between the two.
+const AWARENESS_QUEUE_NAME = 'awareness-aggregation';
+const AWARENESS_DAILY_JOB_NAME = 'daily-awareness-aggregation';
+
+const awarenessQueue = new Queue(AWARENESS_QUEUE_NAME, { connection });
+
+async function scheduleAwarenessDailyJob(): Promise<void> {
+  await awarenessQueue.upsertJobScheduler(
+    AWARENESS_DAILY_JOB_NAME,
+    { pattern: '30 3 * * *' }, // 03:30 server time, every day
+    { name: AWARENESS_DAILY_JOB_NAME }
+  );
+}
+
+const awarenessWorker = new Worker(
+  AWARENESS_QUEUE_NAME,
+  async () => processAwarenessAggregationJob(),
+  { connection }
+);
+
+awarenessWorker.on('completed', (job, result: { date: string }) => {
+  // eslint-disable-next-line no-console -- see the space-health completed handler's own comment above.
+  console.log(`[awareness-aggregation] job ${job.id} completed - aggregated ${result.date}`);
+});
+
+awarenessWorker.on('failed', (job, err) => {
+  // eslint-disable-next-line no-console -- see the space-health failed handler's own comment above.
+  console.error(`[awareness-aggregation] job ${job?.id ?? '(unknown)'} failed`, err);
+});
+
+await scheduleAwarenessDailyJob();
+// eslint-disable-next-line no-console -- see the completed handler's own comment above.
+console.log('[worker] awareness-aggregation worker started; daily job scheduled for 03:30');

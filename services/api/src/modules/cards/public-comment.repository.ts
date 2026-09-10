@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@taavon/database';
+import { logAwarenessEvent } from '../../lib/awareness-events';
 import type { CommentRecord, CommentRepository } from './public-comment.service';
 
 type CommentRow = {
@@ -80,6 +81,13 @@ export function createPrismaCommentRepository(prisma: PrismaClient): CommentRepo
             eventType: 'card.comment_created',
             payload: { cardId, commentId: comment.id, authorId },
           },
+        });
+        await logAwarenessEvent(tx, {
+          type: 'PUBLIC_CONTRIBUTION',
+          actorId: authorId,
+          subjectId: cardId,
+          deepLink: `/cards/${cardId}`,
+          idempotencyKey: `comment:${comment.id}:PUBLIC_CONTRIBUTION`,
         });
         return comment;
       });

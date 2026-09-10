@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { CardResponse } from '@taavon/contracts';
 import { cardResponseSchema, spaceResponseSchema } from '@taavon/contracts';
@@ -33,6 +33,7 @@ type GateState =
 export function CardDetailView({ cardId }: CardDetailViewProps) {
   const [gate, setGate] = useState<GateState>({ status: 'loading' });
   const currentUser = useCurrentUserId();
+  const viewRecorded = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +64,20 @@ export function CardDetailView({ cardId }: CardDetailViewProps) {
       cancelled = true;
     };
   }, [cardId]);
+
+  // "MEANINGFUL_VIEW" - fired once per (card, logged-in viewer) after the
+  // card actually loaded; the server enforces the real dedup (idempotency
+  // key) and self-view exclusion, this ref is only a client-side courtesy
+  // to avoid a redundant network call on a re-render.
+  useEffect(() => {
+    if (gate.status !== 'ready') return;
+    if (currentUser.status !== 'ready' || currentUser.userId === null) return;
+    if (viewRecorded.current === cardId) return;
+    viewRecorded.current = cardId;
+    apiFetch(`/cards/${cardId}/views`, { method: 'POST' }).catch(() => {
+      // A missed view isn't worth surfacing to the reader - awareness is best-effort telemetry, never a blocking concern.
+    });
+  }, [gate.status, currentUser.status, currentUser, cardId]);
 
   if (gate.status === 'loading') {
     return (

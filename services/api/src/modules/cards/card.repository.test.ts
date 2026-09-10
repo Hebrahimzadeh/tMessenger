@@ -35,6 +35,7 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
 
   afterEach(async () => {
     const cardIds = (await getPrisma().card.findMany({ where: { spaceId }, select: { id: true } })).map((c) => c.id);
+    await getPrisma().awarenessEvent.deleteMany({ where: { actorId: { in: [authorId, otherUserId] } } });
     await getPrisma().cardEvent.deleteMany({ where: { cardId: { in: cardIds } } });
     await getPrisma().cardAttachment.deleteMany({ where: { OR: [{ cardId: { in: cardIds } }, { ownerId: { in: [authorId, otherUserId] } }] } });
     await getPrisma().cardSemanticProfile.deleteMany({ where: { cardId: { in: cardIds } } });

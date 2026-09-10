@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import { ZodError } from 'zod';
 import { adminRoutes, type AdminRouteOptions } from './modules/admin/admin.route';
 import { authRoutes, type AuthRouteOptions } from './modules/auth/auth.route';
+import { awarenessRoutes, type AwarenessRouteOptions } from './modules/awareness/awareness.route';
 import { mfaRoutes, type MfaRouteOptions } from './modules/auth/mfa.route';
 import { DevSmsSinkProvider } from './modules/auth/sms-provider';
 import { cardRoutes, type CardRouteOptions } from './modules/cards/card.route';
@@ -43,6 +44,7 @@ export interface BuildAppOptions extends FastifyServerOptions {
   cards?: Partial<CardRouteOptions>;
   publicComments?: Partial<PublicCommentRouteOptions>;
   reservations?: Partial<ReservationRouteOptions>;
+  awareness?: Partial<AwarenessRouteOptions>;
   storage?: Partial<StorageRouteOptions>;
   /** Feeds CORS's allow-list and legal's URL resolution; server.ts always passes the real APP_ORIGIN. */
   appOrigin?: string;
@@ -75,6 +77,7 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     cards,
     publicComments,
     reservations,
+    awareness,
     storage,
     appOrigin,
     storageProvider,
@@ -185,6 +188,11 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     prefix: '/v1',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
     ...reservations,
+  });
+  app.register(awarenessRoutes, {
+    prefix: '/v1',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    ...awareness,
   });
   app.register(storageRoutes, {
     prefix: '/v1/storage',

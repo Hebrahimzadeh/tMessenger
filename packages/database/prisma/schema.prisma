@@ -926,14 +926,17 @@ enum AwarenessEventType {
   RESERVATION_CLOSED
 }
 
-/// The full vocabulary is Task 18's ("رخداد، مشارکت‌های من و dashboard قیف
-/// آگاهی"); this task only ever writes RESERVED / PRIVATE_CHAT_STARTED /
-/// RESERVATION_CLOSED, one per reservation transition - "هر transition
-/// CardEvent و AwarenessEvent بسازد". Deliberately minimal now - "فقط event
-/// label، زمان و deep-link نگه دار و category/status مشتق نکن" (Task 18's
-/// own words) - no private text, no derived status. `idempotencyKey` makes
-/// a transition's event write-once even if the surrounding transaction were
-/// ever retried outside the request-level Idempotency-Key cache.
+/// The append-only awareness/participation log - "event ingestion را
+/// append-only و فاقد متن خصوصی بساز". Every write across the codebase
+/// (card creation, a public comment, joining a role, every reservation
+/// transition, a genuine card view) goes through the same shape: "فقط
+/// event label، زمان و deep-link نگه دار و category/status مشتق نکن" - no
+/// private text, no derived status/category column. `actorId` is
+/// pseudonymous - the internal user id, never a phone number or public
+/// username. `idempotencyKey` is what makes every one of those writers
+/// idempotent (a unique-constraint no-op on a repeat), including
+/// "dedup view" - a card's MEANINGFUL_VIEW key is scoped to
+/// (cardId, viewerId), so a refresh can never inflate it.
 model AwarenessEvent {
   id             String             @id @default(uuid()) @db.Uuid
   type           AwarenessEventType
@@ -945,6 +948,27 @@ model AwarenessEvent {
 
   @@index([actorId, createdAt])
   @@map("awareness_events")
+}
+
+/// One row per calendar day - "aggregation روزانه produced/received/applied
+/// و public/private ratio بساز", computed by services/worker's daily job
+/// (packages/awareness). Deliberately holds only counts, never a list of
+/// the underlying actor/subject ids - "retention شناسهٔ خام analytics را
+/// حداقل کن": the admin dashboard this feeds never sees a raw id, only
+/// these aggregates. `@@unique(date)` makes recomputing a day idempotent
+/// (upsert, not insert).
+model AwarenessDailyAggregate {
+  id                       String   @id @default(uuid()) @db.Uuid
+  date                     DateTime @unique @db.Date
+  producedCount            Int
+  meaningfulViewCount      Int
+  publicContributionCount  Int
+  appliedCount             Int
+  privateChatStartedCount  Int
+  reservationClosedCount   Int
+  computedAt               DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("awareness_daily_aggregates")
 }
 
 /// Append-only. `targetId`/`actorId` are deliberately unconstrained (no FK) -
