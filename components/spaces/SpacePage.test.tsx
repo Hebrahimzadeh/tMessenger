@@ -3,6 +3,8 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SpacePage } from './SpacePage';
 
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const originalFetch = global.fetch;
 const SPACE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -38,14 +40,25 @@ function fullSpace(overrides: Record<string, unknown> = {}) {
 }
 
 function mockFetchByUrl(handlers: Record<string, unknown>) {
+  const entries = Object.entries(handlers);
   global.fetch = vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
-    for (const [path, body] of Object.entries(handlers)) {
+    // An exact suffix match wins first - `/spaces/:id` would otherwise also
+    // match `/spaces/:id/cards`, `/spaces/:id/pins`, `/spaces/:id/invites`
+    // etc. as a mere substring; only a pattern with a trailing query string
+    // (like `/spaces?q=`) needs the plain-substring fallback below.
+    for (const [path, body] of entries) {
+      if (url.endsWith(path)) return Promise.resolve(jsonResponse(200, body));
+    }
+    for (const [path, body] of entries) {
       if (url.includes(path)) return Promise.resolve(jsonResponse(200, body));
     }
     return Promise.resolve(jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'x', correlationId: 'r', details: [] } }));
   }) as unknown as typeof fetch;
 }
+
+const EMPTY_CARDS_PAGE = { items: [], nextCursor: null };
+const EMPTY_PINS = { items: [], limit: 5 };
 
 describe('SpacePage', () => {
   afterEach(() => {
@@ -141,14 +154,17 @@ describe('SpacePage', () => {
     expect(await screen.findByText(/abc123token/)).toBeInTheDocument();
   });
 
-  it('shows a real empty state for pins, tools, and card-creation sections (no card model exists yet)', async () => {
-    mockFetchByUrl({ [`/spaces/${SPACE_ID}`]: fullSpace() });
+  it('shows a real empty state for pins and tools, and a real create-card trigger', async () => {
+    mockFetchByUrl({
+      [`/spaces/${SPACE_ID}`]: fullSpace(),
+      [`/spaces/${SPACE_ID}/cards`]: EMPTY_CARDS_PAGE,
+      [`/spaces/${SPACE_ID}/pins`]: EMPTY_PINS,
+    });
     render(<SpacePage idOrSlug={SPACE_ID} />);
     await screen.findByText('سازمان‌دهنده');
 
-    expect(screen.getByText(/هنوز چیزی سنجاق نشده/)).toBeInTheDocument();
     expect(screen.getByText(/ابزاری برای این بستر هنوز/)).toBeInTheDocument();
-    expect(screen.getByText(/امکان ایجاد کارت به‌زودی/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ثبت کارت جدید' })).toBeInTheDocument();
   });
 
   it('renders example cards from cardHints in the feed section', async () => {
@@ -156,6 +172,8 @@ describe('SpacePage', () => {
       [`/spaces/${SPACE_ID}`]: fullSpace({
         definition: { ...fullSpace().definition, cardHints: [{ isExample: true, label: 'نمونه', title: 'کارت نمونه' }] },
       }),
+      [`/spaces/${SPACE_ID}/cards`]: EMPTY_CARDS_PAGE,
+      [`/spaces/${SPACE_ID}/pins`]: EMPTY_PINS,
     });
     render(<SpacePage idOrSlug={SPACE_ID} />);
     expect(await screen.findByText('کارت نمونه')).toBeInTheDocument();

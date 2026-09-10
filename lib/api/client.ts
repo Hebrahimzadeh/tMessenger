@@ -37,7 +37,8 @@ function createCorrelationId(): string {
   return `cid-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function apiBaseUrl(): string {
+/** Exported for the rare caller that needs a raw XHR instead of `apiFetch` (e.g. CardAttachmentPicker's real upload-progress events, which `fetch` cannot report). */
+export function apiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/v1';
 }
 

@@ -36,7 +36,14 @@ const PUBLIC_PATHS = ['/login', '/legal/terms', '/legal/privacy', '/system-statu
 // this file's own header comment: the proxy does only a cheap redirect,
 // never the authoritative check) - the same division of responsibility
 // /u/ already relies on for its own sibling authenticated pages elsewhere.
-const PUBLIC_PATH_PREFIXES = ['/u/', '/spaces/'];
+//
+// Task 17 extends it again with /cards/ - a card's own detail page
+// (/cards/[cardId]) is public reading exactly like a PUBLISHED space's
+// page (GET /v1/cards/:cardId itself is public, gated only by the card's
+// space being PUBLISHED - see card.service.ts's getCard); owner-only
+// affordances on that page (reservation actions, comment moderation) are
+// still authorized server-side per request, not by this route being public.
+const PUBLIC_PATH_PREFIXES = ['/u/', '/spaces/', '/cards/'];
 
 function isPublicPath(pathname: string): boolean {
   return (

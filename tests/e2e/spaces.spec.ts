@@ -36,7 +36,9 @@ test('creates and publishes a space through the full wizard, then the public pag
   // unit tests.
   await spaceLink.click();
   await expect(page.getByText('سلامت بستر')).toBeVisible();
-  await expect(page.getByText('جدید')).toBeVisible();
+  // Scoped to the exact status value (not a bare substring search) -
+  // Task 17's own "ثبت کارت جدید" button also contains "جدید".
+  await expect(page.getByText('جدید', { exact: true })).toBeVisible();
 
   // The public page, from a completely separate, anonymous browser context.
   // `href` holds the raw (non-percent-encoded) Persian slug, exactly as

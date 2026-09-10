@@ -1,46 +1,113 @@
-import type { SpaceCardHint } from '@taavon/contracts';
+'use client';
+
+import { useEffect, useState } from 'react';
+import type { CardListItem, SpaceCardHint } from '@taavon/contracts';
+import { cardListResponseSchema } from '@taavon/contracts';
+import { apiFetch, ApiError } from '@/lib/api/client';
+import { CardTemplate } from './CardTemplate';
 
 export interface SpaceFeedProps {
+  spaceId: string;
   cardHints: SpaceCardHint[] | null;
 }
 
 /**
- * "کارت‌های نمونه همیشه badge «نمونه — محتوای واقعی نیست» داشته باشند و CTA
- * تعامل/رزرو/پسند روی آن‌ها غیرفعال باشد" - real cards (Task 14) don't
- * exist yet, so this is the only content the feed can show before then;
- * every affordance below is disabled, not just visually muted, so it can
- * never be mistaken for something a visitor can actually act on.
+ * The real, API-backed feed - real cards (Task 14+) now exist, fetched via
+ * `GET /spaces/:id/cards` (ranked server-side, see card-ranking.ts) and
+ * rendered through `CardTemplate`'s `variant: 'real'`. Example hints from
+ * the space's own definition are still shown (`variant: 'example'`) as
+ * inspiration underneath - always permanently badged and fully inert,
+ * exactly as before, just delegated to `CardTemplate` so that rule lives
+ * in one place instead of being duplicated between a hint-renderer and a
+ * real-card-renderer.
  */
-export function SpaceFeed({ cardHints }: SpaceFeedProps) {
-  if (!cardHints || cardHints.length === 0) {
-    return (
-      <div dir="rtl" className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
-        هنوز کارتی در این بستر ثبت نشده است.
-      </div>
-    );
+export function SpaceFeed({ spaceId, cardHints }: SpaceFeedProps) {
+  const [cards, setCards] = useState<CardListItem[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const page = cardListResponseSchema.parse(await apiFetch(`/spaces/${spaceId}/cards`));
+        if (!cancelled) {
+          setCards(page.items);
+          setNextCursor(page.nextCursor);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'بارگذاری فید ممکن نشد.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
+
+  async function loadMore() {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = cardListResponseSchema.parse(
+        await apiFetch(`/spaces/${spaceId}/cards?cursor=${encodeURIComponent(nextCursor)}`)
+      );
+      setCards((prev) => [...(prev ?? []), ...page.items]);
+      setNextCursor(page.nextCursor);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'بارگذاری کارت‌های بیشتر ممکن نشد.');
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
+  const hints = cardHints ?? [];
+  const hasNothing = cards !== null && cards.length === 0 && hints.length === 0;
+
   return (
-    <ul dir="rtl" className="space-y-3">
-      {cardHints.map((hint, index) => (
-        <li key={index} className="rounded-xl border border-gray-200 bg-white p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="font-medium text-gray-900">{hint.title}</h3>
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
-              نمونه — محتوای واقعی نیست
-            </span>
-          </div>
-          {hint.description && <p className="mb-3 text-sm text-gray-600">{hint.description}</p>}
-          <div className="flex gap-2">
-            <button type="button" disabled className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm text-gray-400">
-              پسندیدن
-            </button>
-            <button type="button" disabled className="rounded-xl border border-gray-200 px-3 py-1.5 text-sm text-gray-400">
-              رزرو
-            </button>
-          </div>
-        </li>
-      ))}
-    </ul>
+    <div dir="rtl" className="text-right">
+      {error && (
+        <p role="alert" className="mb-2 text-sm text-red-700">
+          {error}
+        </p>
+      )}
+
+      {hasNothing && (
+        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
+          هنوز کارتی در این بستر ثبت نشده است.
+        </div>
+      )}
+
+      {cards && cards.length > 0 && (
+        <ul>
+          {cards.map((card) => (
+            <li key={card.id}>
+              <CardTemplate variant="real" card={card} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {nextCursor && (
+        <button
+          type="button"
+          onClick={loadMore}
+          disabled={loadingMore}
+          className="mb-3 w-full rounded-xl border border-gray-200 py-2 text-sm text-gray-600 disabled:opacity-50"
+        >
+          {loadingMore ? 'در حال بارگذاری...' : 'نمایش کارت‌های بیشتر'}
+        </button>
+      )}
+
+      {hints.length > 0 && (
+        <ul>
+          {hints.map((hint, index) => (
+            <li key={index}>
+              <CardTemplate variant="example" hint={hint} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

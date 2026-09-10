@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   createSpaceInviteResponseSchema,
   spaceResponseSchema,
@@ -11,7 +12,10 @@ import {
   type SpaceRoleContract,
   type SpaceSearchItem,
 } from '@taavon/contracts';
+import type { CardResponse } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
+import { CreateCardSheet } from './CreateCardSheet';
+import { PinnedCards } from './PinnedCards';
 import { SpaceHeader } from './SpaceHeader';
 import { SpaceFeed } from './SpaceFeed';
 import { SpaceHealthPanel } from './SpaceHealthPanel';
@@ -27,7 +31,9 @@ function EmptySection({ children }: { children: React.ReactNode }) {
 }
 
 export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
+  const router = useRouter();
   const [gate, setGate] = useState<GateState>({ status: 'loading' });
+  const [createSheetOpen, setCreateSheetOpen] = useState(false);
   const [joinedRoleIds, setJoinedRoleIds] = useState<Set<string>>(new Set());
   const [roleError, setRoleError] = useState<string | null>(null);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
@@ -222,17 +228,32 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
 
       <section className="p-4">
         <h2 className="mb-2 text-sm font-semibold text-gray-800">سنجاق‌شده‌ها</h2>
-        <EmptySection>هنوز چیزی سنجاق نشده است.</EmptySection>
-      </section>
-
-      <section className="p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-800">فید</h2>
-        <SpaceFeed cardHints={space.definition.cardHints} />
+        <PinnedCards spaceId={space.id} />
       </section>
 
       <section className="p-4">
         <h2 className="mb-2 text-sm font-semibold text-gray-800">ایجاد کارت</h2>
-        <EmptySection>امکان ایجاد کارت به‌زودی اضافه می‌شود.</EmptySection>
+        <button
+          type="button"
+          onClick={() => setCreateSheetOpen(true)}
+          className="w-full rounded-xl border border-dashed border-gray-300 py-3 text-sm font-medium text-gray-600 hover:bg-gray-50"
+        >
+          ثبت کارت جدید
+        </button>
+        <CreateCardSheet
+          isOpen={createSheetOpen}
+          spaceId={space.id}
+          onClose={() => setCreateSheetOpen(false)}
+          onCreated={(card: CardResponse) => {
+            setCreateSheetOpen(false);
+            router.push(`/cards/${card.id}`);
+          }}
+        />
+      </section>
+
+      <section className="p-4">
+        <h2 className="mb-2 text-sm font-semibold text-gray-800">فید</h2>
+        <SpaceFeed spaceId={space.id} cardHints={space.definition.cardHints} />
       </section>
 
       <section className="p-4">
