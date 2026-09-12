@@ -90,6 +90,8 @@ model User {
   cardReservationsOwned           CardReservation[]        @relation("CardReservationOwner")
   cardReservationsMade            CardReservation[]        @relation("CardReservationReserver")
   conversationMemberships         ConversationMember[]     @relation("ConversationMemberUser")
+  sentMessages                    Message[]                @relation("MessageSender")
+  messageReceipts                 MessageReceipt[]         @relation("MessageReceiptUser")
 
   @@index([status])
   @@map("users")
@@ -863,21 +865,30 @@ model CardReservation {
 
 enum ConversationKind {
   DIRECT
+  /// The "همیار تعاون" assistant thread. Exactly one per person, and the
+  /// only kind whose messages may have a null sender (Task 19). There is
+  /// deliberately no User row behind the assistant, so no credential can
+  /// ever authenticate as it - see MessageSenderKind.
+  SYSTEM_ASSISTANT
 }
 
-/// A minimal conversation shell - Task 19 adds real messages on top. Only
-/// `DIRECT` exists for now; `pairKey` (the two member ids, sorted and
-/// joined) is what makes `getOrCreateDirectConversation` idempotent - the
-/// same two people always resolve to the same one conversation, reused
-/// across every reservation they ever share, found via a single unique
-/// lookup rather than a query over ConversationMember rows.
+/// `pairKey` (the two member ids, sorted and joined) is what makes
+/// `getOrCreateDirectConversation` idempotent - the same two people always
+/// resolve to the same one conversation, reused across every reservation
+/// they ever share, found via a single unique lookup rather than a query
+/// over ConversationMember rows. Task 19 reuses that same unique column for
+/// the assistant thread ("assistant:<userId>"), so "one helper conversation
+/// per person" is enforced by the same constraint rather than by a second
+/// mechanism that could drift out of step with it.
 model Conversation {
   id        String           @id @default(uuid()) @db.Uuid
   kind      ConversationKind @default(DIRECT)
   pairKey   String?          @unique
   createdAt DateTime         @default(now()) @db.Timestamptz(6)
 
-  members ConversationMember[]
+  members  ConversationMember[]
+  messages Message[]
+  receipts MessageReceipt[]
 
   @@map("conversations")
 }
@@ -893,6 +904,91 @@ model ConversationMember {
 
   @@unique([conversationId, userId])
   @@map("conversation_members")
+}
+
+enum MessageStatus {
+  VISIBLE
+  DELETED
+}
+
+/// A private message. Text lives here and in MessageRevision and nowhere
+/// else: "متن DIRECT فقط در messaging storage و مسیر گزارش M6 مصرف
+/// می‌شود". No awareness event, audit row, AI request or log line ever
+/// carries it - see messaging.repository.ts and the canary test.
+///
+/// `senderId` is nullable for exactly one reason: a SYSTEM_ASSISTANT
+/// message has no human sender. It is never null on a DIRECT message, and
+/// the HTTP layer always stamps it from the caller's own session, so no
+/// request can forge one. `senderKind` records the distinction explicitly
+/// rather than leaving it implied by a null, so a reader never has to guess
+/// whether a null sender means "the assistant" or "data we lost".
+model Message {
+  id             String            @id @default(uuid()) @db.Uuid
+  conversationId String            @db.Uuid
+  senderId       String?           @db.Uuid
+  senderKind     MessageSenderKind @default(USER)
+  status         MessageStatus     @default(VISIBLE)
+  /// The current text. Edits append a MessageRevision and rewrite this;
+  /// a soft delete clears it while the revisions stay for the M6 report path.
+  body           String?
+  revisionCount  Int               @default(1)
+  createdAt      DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime          @updatedAt @db.Timestamptz(6)
+  deletedAt      DateTime?         @db.Timestamptz(6)
+
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  sender       User?             @relation("MessageSender", fields: [senderId], references: [id], onDelete: Restrict)
+  revisions    MessageRevision[]
+
+  /// Serves the keyset page directly: newest first within one conversation,
+  /// with `id` breaking ties on identical timestamps so a page boundary is
+  /// stable rather than occasionally repeating or skipping a row.
+  @@index([conversationId, createdAt, id])
+  @@map("messages")
+}
+
+enum MessageSenderKind {
+  USER
+  /// Only ever written by sendSystemMessage, which requires an in-process
+  /// service credential the HTTP layer does not hold and cannot obtain.
+  SYSTEM_ASSISTANT
+}
+
+/// Immutable history, same discipline as CardRevision and
+/// CardCommentRevision: an edit appends a row, never rewrites one. Survives
+/// a soft delete of its Message on purpose - "audit فقط metadata لازم داشته
+/// باشد، نه متن پیام" keeps text out of the audit log, and this is the one
+/// place the original text is still available to M6's report path.
+model MessageRevision {
+  id             String   @id @default(uuid()) @db.Uuid
+  messageId      String   @db.Uuid
+  revisionNumber Int
+  body           String
+  editorId       String?  @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, revisionNumber])
+  @@map("message_revisions")
+}
+
+/// One read cursor per person per conversation, not one row per message
+/// seen: a two-person thread only ever needs "how far has each side read",
+/// and Task 20's `receipt:read` event carries exactly that. Keyed unique on
+/// the pair so marking read twice is an upsert, never a duplicate.
+model MessageReceipt {
+  id                String   @id @default(uuid()) @db.Uuid
+  conversationId    String   @db.Uuid
+  userId            String   @db.Uuid
+  lastReadMessageId String?  @db.Uuid
+  lastReadAt        DateTime @default(now()) @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  user         User         @relation("MessageReceiptUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([conversationId, userId])
+  @@map("message_receipts")
 }
 
 /// Deduplicates a retried mutating request - "header Idempotency-Key

@@ -82,6 +82,9 @@ async function main() {
     reservations: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
     },
+    messaging: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
     awareness: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
     },

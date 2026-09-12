@@ -1,0 +1,109 @@
+import { z } from 'zod';
+
+/** "message ۱ تا ۸۰۰۰ نویسه". */
+export const MESSAGE_BODY_MIN = 1;
+export const MESSAGE_BODY_MAX = 8000;
+
+export const messageBodySchema = z.string().trim().min(MESSAGE_BODY_MIN).max(MESSAGE_BODY_MAX);
+
+export const conversationKindSchema = z.enum(['DIRECT', 'SYSTEM_ASSISTANT']);
+export type ConversationKind = z.infer<typeof conversationKindSchema>;
+
+export const messageSenderKindSchema = z.enum(['USER', 'SYSTEM_ASSISTANT']);
+export type MessageSenderKind = z.infer<typeof messageSenderKindSchema>;
+
+export const messageStatusSchema = z.enum(['VISIBLE', 'DELETED']);
+export type MessageStatus = z.infer<typeof messageStatusSchema>;
+
+/**
+ * A conversation member as anyone on the other side of the wire may see
+ * them: an id and nothing more.
+ *
+ * This shape is the contract-level half of "serialization هرگز phone،
+ * identity claim یا member خصوصی را ضمیمه نکند". There is no field here for
+ * a phone number, an identity claim, a display name or an avatar, so a
+ * serializer cannot leak one by accident - it would have to change this
+ * schema first, which is a reviewable act rather than an oversight. A
+ * client that wants to show a name fetches the public profile by id through
+ * the profile endpoints, which apply that person's own privacy settings.
+ */
+export const conversationMemberViewSchema = z.object({
+  userId: z.string().uuid(),
+});
+export type ConversationMemberView = z.infer<typeof conversationMemberViewSchema>;
+
+export const conversationViewSchema = z.object({
+  id: z.string().uuid(),
+  kind: conversationKindSchema,
+  /** Everyone in the thread. For SYSTEM_ASSISTANT this is the one owner; the assistant itself is not a member and has no id. */
+  members: z.array(conversationMemberViewSchema),
+  createdAt: z.string().datetime(),
+  /** Null until someone sends something. Only ever a timestamp - never a preview of the text. */
+  lastMessageAt: z.string().datetime().nullable(),
+  /** Messages the caller has not read yet. Counted for the caller alone; it never reveals the other side's reading. */
+  unreadCount: z.number().int().nonnegative(),
+});
+export type ConversationView = z.infer<typeof conversationViewSchema>;
+
+export const conversationListResponseSchema = z.object({
+  items: z.array(conversationViewSchema),
+  nextCursor: z.string().nullable(),
+});
+export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>;
+
+export const messageViewSchema = z.object({
+  id: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  /** Null only for an assistant message - there is no user behind the assistant. */
+  senderId: z.string().uuid().nullable(),
+  senderKind: messageSenderKindSchema,
+  status: messageStatusSchema,
+  /** Null once soft-deleted: the text leaves the view while its revisions stay for the M6 report path. */
+  body: z.string().nullable(),
+  revisionCount: z.number().int().nonnegative(),
+  edited: z.boolean(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type MessageView = z.infer<typeof messageViewSchema>;
+
+export const messageListResponseSchema = z.object({
+  items: z.array(messageViewSchema),
+  nextCursor: z.string().nullable(),
+});
+export type MessageListResponse = z.infer<typeof messageListResponseSchema>;
+
+export const sendMessageBodySchema = z.object({
+  body: messageBodySchema,
+});
+export type SendMessageBody = z.infer<typeof sendMessageBodySchema>;
+
+export const editMessageBodySchema = z.object({
+  body: messageBodySchema,
+});
+export type EditMessageBody = z.infer<typeof editMessageBodySchema>;
+
+/**
+ * Opening a direct conversation names the other person and nobody else.
+ * The caller is always themselves, taken from their session rather than the
+ * body, so this cannot be used to create a conversation between two other
+ * people.
+ */
+export const createDirectConversationBodySchema = z.object({
+  withUserId: z.string().uuid(),
+});
+export type CreateDirectConversationBody = z.infer<typeof createDirectConversationBodySchema>;
+
+export const markReadBodySchema = z.object({
+  /** The newest message the caller has seen. Must belong to the conversation being marked. */
+  lastReadMessageId: z.string().uuid(),
+});
+export type MarkReadBody = z.infer<typeof markReadBodySchema>;
+
+export const readReceiptViewSchema = z.object({
+  conversationId: z.string().uuid(),
+  userId: z.string().uuid(),
+  lastReadMessageId: z.string().uuid().nullable(),
+  lastReadAt: z.string().datetime(),
+});
+export type ReadReceiptView = z.infer<typeof readReceiptViewSchema>;
