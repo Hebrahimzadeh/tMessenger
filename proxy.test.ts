@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { proxy } from './proxy';
 
@@ -67,4 +67,32 @@ describe('proxy', () => {
     const response = await proxy(requestFor('/uploads/123'));
     expect(response.status).toBe(307);
   });
+});
+
+describe('UI preview routing', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each(['/', '/chats', '/comments', '/chats/bot', '/platforms/1'])(
+    'lets visitors view the local demo screen %s when preview is enabled',
+    (path) => {
+      vi.stubEnv('UI_PREVIEW_MODE', 'true');
+      expect(proxy(requestFor(path)).headers.get('location')).toBeNull();
+    }
+  );
+
+  it.each(['/admin', '/admin/metrics', '/profile', '/settings/security', '/participations', '/chats/42/private'])(
+    'preserves the login requirement for %s during preview',
+    (path) => {
+      vi.stubEnv('UI_PREVIEW_MODE', 'true');
+      expect(proxy(requestFor(path)).status).toBe(307);
+    }
+  );
+
+  it.each([undefined, 'false', '1'])(
+    'requires normal login when preview is not explicitly enabled (%s)',
+    (value) => {
+      vi.stubEnv('UI_PREVIEW_MODE', value);
+      expect(proxy(requestFor('/')).status).toBe(307);
+    }
+  );
 });

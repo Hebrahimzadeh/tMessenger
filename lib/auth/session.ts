@@ -71,6 +71,9 @@ function verifyAccessToken(token: string, secret: string): AccessTokenPayload | 
  * this directly.
  */
 export async function getCurrentUser(): Promise<AuthUser | null> {
+  // Establish request-time rendering before reading runtime-only secrets.
+  // Next.js can then skip this path during builds without production keys.
+  const store = await cookies();
   const secret = process.env.SESSION_HMAC_KEY;
   if (!secret) {
     // Fails loudly rather than silently treating every visitor as logged
@@ -78,7 +81,6 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     throw new Error('SESSION_HMAC_KEY is required (server-side only - never expose this to the browser).');
   }
 
-  const store = await cookies();
   const token = store.get(ACCESS_TOKEN_COOKIE)?.value;
   if (!token) return null;
 

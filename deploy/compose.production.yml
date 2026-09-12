@@ -1,0 +1,184 @@
+name: tmessenger
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+x-api-environment: &api-environment
+  NODE_ENV: production
+  DATABASE_URL: postgresql://taavon:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/taavon
+  SHADOW_DATABASE_URL: postgresql://taavon:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/taavon_shadow
+  REDIS_URL: redis://redis:6379
+  S3_ENDPOINT: ${S3_ENDPOINT:?Set the public storage endpoint}
+  S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
+  SESSION_HMAC_KEY: ${SESSION_HMAC_KEY:?Set SESSION_HMAC_KEY}
+  PHONE_ENCRYPTION_KEY: ${PHONE_ENCRYPTION_KEY:?Set PHONE_ENCRYPTION_KEY}
+  APP_ORIGIN: https://tmessenger.taavonafarin.ir
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taavon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: taavon
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U taavon -d taavon']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+
+  object-storage:
+    image: tmessenger-storage:${RELEASE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.storage
+    restart: unless-stopped
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
+    ports:
+      - '127.0.0.1:18900:9000'
+    volumes:
+      - object_storage_data:/data
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+
+  object-storage-init:
+    image: tmessenger-storage:${RELEASE_TAG:-latest}
+    depends_on:
+      object-storage:
+        condition: service_healthy
+    environment:
+      S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'mc alias set local http://object-storage:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" >/dev/null && mc mb --ignore-existing "local/$$S3_BUCKET"'
+    restart: on-failure
+    logging: *logging
+
+  migrate:
+    image: tmessenger-api:${RELEASE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+    environment: *api-environment
+    working_dir: /app
+    command: ['npm', 'run', 'db:migrate', '--workspace', 'packages/database']
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
+
+  api:
+    image: tmessenger-api:${RELEASE_TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - ${RUNTIME_ENV_FILE:-../.env}
+    environment:
+      <<: *api-environment
+      PORT: 4000
+      HOST: 0.0.0.0
+    ports:
+      - '127.0.0.1:18400:4000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      object-storage-init:
+        condition: service_completed_successfully
+    logging: *logging
+
+  worker:
+    image: tmessenger-api:${RELEASE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://taavon:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/taavon
+      REDIS_URL: redis://redis:6379
+    working_dir: /app/services/worker
+    command: ['node', '/app/node_modules/tsx/dist/cli.mjs', 'src/worker.ts']
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    logging: *logging
+
+  web:
+    image: tmessenger-web:${RELEASE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      SESSION_HMAC_KEY: ${SESSION_HMAC_KEY:?Set SESSION_HMAC_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      UI_PREVIEW_MODE: ${UI_PREVIEW_MODE:-false}
+    ports:
+      - '127.0.0.1:18300:3000'
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://127.0.0.1:3000/login', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *logging
+
+  proxy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:18880:80'
+    volumes:
+      - ${PROXY_CONFIG:-./Caddyfile.production}:/etc/caddy/Caddyfile:ro
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1/healthz']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+volumes:
+  postgres_data:
+  redis_data:
+  object_storage_data:

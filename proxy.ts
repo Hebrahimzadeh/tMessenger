@@ -60,7 +60,14 @@ export function proxy(request: NextRequest): NextResponse {
   // current path via headers() - there is no other way to read it there.
   response.headers.set('x-pathname', pathname);
 
-  if (isPublicPath(pathname)) {
+  // Preview exposes only existing browser-local demo screens. Real account
+  // pages and API authorization retain their normal session requirements.
+  const isUiPreviewPath =
+    process.env.UI_PREVIEW_MODE === 'true' &&
+    (request.method === 'GET' || request.method === 'HEAD') &&
+    (['/', '/chats', '/comments'].includes(pathname) || /^\/(chats|platforms)\/[^/]+$/.test(pathname));
+
+  if (isPublicPath(pathname) || isUiPreviewPath) {
     return response;
   }
 

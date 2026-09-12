@@ -15,7 +15,10 @@ FROM base AS deps
 COPY package.json package-lock.json ./
 COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/database/package.json ./packages/database/package.json
+COPY packages/awareness/package.json ./packages/awareness/package.json
+COPY packages/space-health/package.json ./packages/space-health/package.json
 COPY services/api/package.json ./services/api/package.json
+COPY services/worker/package.json ./services/worker/package.json
 RUN npm ci
 
 # ---- runner: real source + generated Prisma client, non-root ----
@@ -23,10 +26,14 @@ FROM base AS runner
 ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 apiuser
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/services/worker/node_modules ./services/worker/node_modules
 COPY package.json ./
 COPY packages/contracts ./packages/contracts
 COPY packages/database ./packages/database
+COPY packages/awareness ./packages/awareness
+COPY packages/space-health ./packages/space-health
 COPY services/api ./services/api
+COPY services/worker ./services/worker
 # `prisma generate` only needs the schema, not a live connection, but
 # prisma.config.ts validates DATABASE_URL/SHADOW_DATABASE_URL are *present*
 # at config-load time. These placeholders are never connected to - they're
@@ -36,7 +43,7 @@ COPY services/api ./services/api
 RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" \
   SHADOW_DATABASE_URL="postgresql://build:build@localhost:5432/build_shadow" \
   npm run db:generate --workspace packages/database
-RUN chown -R apiuser:nodejs /app
+# Runtime source and dependencies are read-only; keep them root-owned.
 USER apiuser
 WORKDIR /app/services/api
 EXPOSE 4000

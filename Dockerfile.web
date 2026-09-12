@@ -10,12 +10,16 @@ FROM base AS deps
 COPY package.json package-lock.json ./
 COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/database/package.json ./packages/database/package.json
+COPY packages/awareness/package.json ./packages/awareness/package.json
+COPY packages/space-health/package.json ./packages/space-health/package.json
 COPY services/api/package.json ./services/api/package.json
+COPY services/worker/package.json ./services/worker/package.json
 RUN npm ci
 
 # ---- builder: build the Next.js app ----
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/services/worker/node_modules ./services/worker/node_modules
 COPY . .
 ARG NEXT_PUBLIC_API_BASE_URL=/api/v1
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL

@@ -1,0 +1,20 @@
+:80 {
+    header X-TMessenger-Mode ui-preview
+    respond /healthz 200
+    request_body {
+        max_size 30MB
+    }
+    handle /tmessenger-files/* {
+        reverse_proxy object-storage:9000
+    }
+    @unavailable path /api/* /socket.io/*
+    handle @unavailable {
+        header Content-Type application/json
+        respond "{\"error\":{\"code\":\"UI_PREVIEW_MODE\",\"message\":\"این نسخه برای نمایش ظاهر سایت است؛ ورود پیامکی و خدمات آنلاین فعلاً غیرفعال‌اند.\",\"correlationId\":\"ui-preview\"}}" 503
+    }
+    handle {
+        reverse_proxy web:3000 {
+            header_up X-Forwarded-Proto https
+        }
+    }
+}

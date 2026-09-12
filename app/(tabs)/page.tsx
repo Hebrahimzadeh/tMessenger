@@ -1,7 +1,10 @@
 import Link from 'next/link';
+import { PlatformsList } from '@/components/platforms/PlatformsList';
 import { SpaceDiscoveryList } from '@/components/spaces/SpaceDiscoveryList';
 
 export default function HomePage() {
+  if (process.env.UI_PREVIEW_MODE === 'true') return <PlatformsList />;
+
   return (
     <div dir="rtl" className="text-right">
       <div className="flex items-center justify-between p-4 pb-0">

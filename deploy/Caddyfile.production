@@ -1,0 +1,20 @@
+:80 {
+    respond /healthz 200
+    request_body {
+        max_size 30MB
+    }
+    handle /tmessenger-files/* {
+        reverse_proxy object-storage:9000
+    }
+    handle_path /api/* {
+        reverse_proxy api:4000
+    }
+    handle /socket.io/* {
+        reverse_proxy api:4000
+    }
+    handle {
+        reverse_proxy web:3000 {
+            header_up X-Forwarded-Proto https
+        }
+    }
+}

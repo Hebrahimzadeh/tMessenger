@@ -1,0 +1,10 @@
+# The vendor images' glibc requires x86-64-v2, while their static Go
+# executables work on this server's baseline x86-64 CPU. Keep the exact
+# vendor binaries and run them on Alpine for CPU-compatible shell tools.
+FROM minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e AS server
+FROM minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727 AS client
+FROM alpine:3.22
+COPY --from=server /usr/bin/minio /usr/bin/minio
+COPY --from=client /usr/bin/mc /usr/bin/mc
+ENTRYPOINT ["/usr/bin/minio"]
+CMD ["server", "/data", "--console-address", ":9001"]
