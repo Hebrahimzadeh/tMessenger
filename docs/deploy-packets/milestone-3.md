@@ -117,8 +117,9 @@ Two commits sit on top of Task 18's approval. Neither belongs to a numbered task
 
 ## Known limitations
 
-- **The working tree is not clean at this SHA.** Uncommitted local work is in progress on `Dockerfile.api`, `Dockerfile.web`, `app/(tabs)/layout.tsx`, `app/(tabs)/page.tsx`, `lib/auth/session.ts`, `proxy.ts` and `proxy.test.ts`, plus eight untracked files under `deploy/`. It adds a `UI_PREVIEW_MODE` switch that lets anonymous visitors see the prototype's browser-local demo screens, and production deploy configs. None of it is part of this packet, and images built today would not match this SHA. Commit or set it aside before deploying.
-- **`UI_PREVIEW_MODE` is now largely redundant for its stated purpose.** It was added to get past login without SMS; the change in `7386942` addresses that directly, through the real login flow, without any route bypass. If it is kept, note that the paths it opens (`/`, `/chats`, `/comments`, `/chats/:id`, `/platforms/:id`) render only local seed data and make no API calls, so no real user data is exposed — that was checked, not assumed.
+- **Resolved before approval:** the deploy work that was uncommitted when this packet was written is now committed as `19d213c`, so the tree is clean and images built from it match. That commit carries `deploy/compose.production.yml`, the two Caddyfiles, the nginx virtual hosts, the pinned storage image, `activate-production.sh`, `deploy/PRODUCTION.md`, and the `UI_PREVIEW_MODE` switch.
+- **`UI_PREVIEW_MODE` is largely redundant for its original purpose.** It was added to get past login without SMS; `7386942` addresses that directly, through the real login flow, with no route bypass. Kept for showing the interface before an SMS gateway exists. The paths it opens (`/`, `/chats`, `/comments`, `/chats/:id`, `/platforms/:id`) render only local seed data and make no API calls, so no real user data is exposed — checked, not assumed. `activate-production.sh` refuses to activate production while it is on.
+- **`deploy/PRODUCTION.md` records the server IP, SSH port and login user.** That is operational convenience, not a credential, but it is worth deciding deliberately whether this repository should carry it.
 - **No TLS.** Caddy serves plain HTTP on `:80`. Automatic HTTPS is a small change once a real domain exists.
 - **This verification machine has no native Docker.** Everything above ran through WSL2 Docker. The WSL VM suspends aggressively here, taking the containers down mid-run; several test runs had to be re-staged with the VM held awake to get a clean measurement. A real Linux deployment target has no such layer. This is the same condition documented in the Task 03 and Task 04 reviews.
 - **Host ports are shifted on this machine.** Postgres, Redis and MinIO publish on 15432, 16379 and 19000/19001, because the conventional ports are already taken locally. The committed `docker-compose.yml` still defaults to the conventional ports, which is correct everywhere else.
@@ -131,4 +132,7 @@ Two commits sit on top of Task 18's approval. Neither belongs to a numbered task
 
 Roll back to `5c61ac4` (`docs(review): approve task 18`) to drop both post-Task-18 commits, or to any task commit in the table above. Rebuild and `docker compose up -d` per `deploy/README.md`. Migrations are forward-only and additive: rolling back application code does not and must not roll back any of the four M3 migrations.
 
-Owner decision: WAITING_FOR_OWNER
+Owner decision: MILESTONE-3 APPROVED
+
+Approved by the owner on 2026-09-12. Milestone 4 ("پیام‌رسان خصوصی realtime") may
+begin: Task 19's gate — "Review 18 و تأیید M3" — is now satisfied.
