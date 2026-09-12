@@ -88,7 +88,13 @@ function fakeRepo() {
     async findMessage(id) {
       return messages.get(id) ?? null;
     },
-    async insertMessage({ conversationId, senderId, senderKind, body }) {
+    async insertMessage({ conversationId, senderId, senderKind, body, clientMessageId }) {
+      if (clientMessageId) {
+        const already = [...messages.values()].find(
+          (m) => m.conversationId === conversationId && m.clientMessageId === clientMessageId
+        );
+        if (already) return already;
+      }
       const record: MessageRecord = {
         id: randomUUID(),
         conversationId,
@@ -97,6 +103,7 @@ function fakeRepo() {
         status: 'VISIBLE',
         body,
         revisionCount: 1,
+        clientMessageId: clientMessageId ?? null,
         createdAt: new Date((clock += 1000)),
         updatedAt: new Date(clock),
       };

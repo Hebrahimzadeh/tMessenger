@@ -25,11 +25,13 @@
     "fastify-plugin": "^6.0.0",
     "ioredis": "^6.0.0",
     "libphonenumber-js": "^1.13.12",
+    "socket.io": "^4.8.3",
     "tsx": "^4.23.13",
     "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "socket.io-client": "^4.8.3",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }

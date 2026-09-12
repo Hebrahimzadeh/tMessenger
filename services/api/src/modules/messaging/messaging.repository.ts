@@ -45,6 +45,7 @@ type MessageRow = {
   status: 'VISIBLE' | 'DELETED';
   body: string | null;
   revisionCount: number;
+  clientMessageId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -205,23 +206,54 @@ export function createPrismaMessagingRepository(prisma: PrismaClient): Messaging
       return row ? toMessageRecord(row as MessageRow) : null;
     },
 
-    async insertMessage({ conversationId, senderId, senderKind, body }) {
-      const row = await prisma.$transaction(async (tx) => {
-        const message = await tx.message.create({
-          data: { conversationId, senderId, senderKind, body, revisionCount: 1 },
+    async insertMessage({ conversationId, senderId, senderKind, body, clientMessageId }) {
+      // A socket that drops mid-send cannot know whether its message landed,
+      // so the client simply sends again with the same id. Checking first
+      // handles the ordinary retry; the unique index and the catch below
+      // handle the case where both attempts arrive at once, which no
+      // check-then-insert could.
+      if (clientMessageId) {
+        const already = await prisma.message.findUnique({
+          where: { conversationId_clientMessageId: { conversationId, clientMessageId } },
         });
-        await tx.messageRevision.create({
-          data: { messageId: message.id, revisionNumber: 1, body, editorId: senderId },
+        if (already) return toMessageRecord(already as MessageRow);
+      }
+
+      try {
+        const row = await prisma.$transaction(async (tx) => {
+          const message = await tx.message.create({
+            data: {
+              conversationId,
+              senderId,
+              senderKind,
+              body,
+              revisionCount: 1,
+              clientMessageId: clientMessageId ?? null,
+            },
+          });
+          await tx.messageRevision.create({
+            data: { messageId: message.id, revisionNumber: 1, body, editorId: senderId },
+          });
+          // No awareness event, no outbox event, no audit row carrying text.
+          // Task 16 already logs PRIVATE_CHAT_STARTED when a reservation opens
+          // the conversation, which is the only awareness signal private
+          // messaging produces - counting messages would turn private
+          // conversation into a measured activity, which this milestone's
+          // whole premise rules out. The canary test asserts this directly.
+          return message;
         });
-        // No awareness event, no outbox event, no audit row carrying text.
-        // Task 16 already logs PRIVATE_CHAT_STARTED when a reservation opens
-        // the conversation, which is the only awareness signal private
-        // messaging produces - counting messages would turn private
-        // conversation into a measured activity, which this milestone's
-        // whole premise rules out. The canary test asserts this directly.
-        return message;
-      });
-      return toMessageRecord(row as MessageRow);
+        return toMessageRecord(row as MessageRow);
+      } catch (err) {
+        // Two retries of the same send arriving together: the unique index
+        // let exactly one through, so return that one rather than failing a
+        // caller who asked for something that now exists.
+        if (!clientMessageId) throw err;
+        const raced = await prisma.message.findUnique({
+          where: { conversationId_clientMessageId: { conversationId, clientMessageId } },
+        });
+        if (!raced) throw err;
+        return toMessageRecord(raced as MessageRow);
+      }
     },
 
     async addRevision({ messageId, editorId, body }) {

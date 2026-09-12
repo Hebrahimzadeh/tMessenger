@@ -90,6 +90,14 @@ services:
       # this file - set them in a real .env before deploying.
       SESSION_HMAC_KEY: ${SESSION_HMAC_KEY:?SESSION_HMAC_KEY must be set}
       PHONE_ENCRYPTION_KEY: ${PHONE_ENCRYPTION_KEY:?PHONE_ENCRYPTION_KEY must be set}
+      # Task 06 made a real SMS gateway mandatory in production, and this
+      # service runs as production. Without these the API throws
+      # SmsProviderNotConfiguredError at boot and restarts forever - which is
+      # exactly what happened the first time this stack was brought up
+      # against post-Task-06 code. Named with no default so Compose refuses
+      # up front instead, the same way it does for the two secrets above.
+      SMS_PROVIDER_WEBHOOK_URL: ${SMS_PROVIDER_WEBHOOK_URL:?SMS_PROVIDER_WEBHOOK_URL must be set - production refuses to start without a real SMS gateway}
+      SMS_PROVIDER_API_KEY: ${SMS_PROVIDER_API_KEY:?SMS_PROVIDER_API_KEY must be set - production refuses to start without a real SMS gateway}
       APP_ORIGIN: ${APP_ORIGIN:-http://localhost}
     depends_on:
       postgres:

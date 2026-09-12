@@ -50,6 +50,7 @@ function message(over: Partial<MessageRecord> = {}): MessageRecord {
     status: 'VISIBLE',
     body: 'سلام',
     revisionCount: 1,
+    clientMessageId: null,
     createdAt: new Date('2026-09-01T10:05:00.000Z'),
     updatedAt: new Date('2026-09-01T10:05:00.000Z'),
     ...over,

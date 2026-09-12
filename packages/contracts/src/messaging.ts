@@ -62,6 +62,8 @@ export const messageViewSchema = z.object({
   body: z.string().nullable(),
   revisionCount: z.number().int().nonnegative(),
   edited: z.boolean(),
+  /** Echoed back so a sender can match this against the message it drew optimistically. Null for a message sent over REST. */
+  clientMessageId: z.string().nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
@@ -107,3 +109,54 @@ export const readReceiptViewSchema = z.object({
   lastReadAt: z.string().datetime(),
 });
 export type ReadReceiptView = z.infer<typeof readReceiptViewSchema>;
+
+/** Bounds the client-generated id so it cannot be used as a smuggled payload. */
+export const clientMessageIdSchema = z.string().trim().min(1).max(64);
+
+/**
+ * `message:send` over the socket. `clientMessageId` is what makes a resend
+ * after a dropped connection safe: the server stores it and returns the
+ * original message rather than writing a second one.
+ */
+export const socketSendMessageSchema = z.object({
+  conversationId: z.string().uuid(),
+  body: messageBodySchema,
+  clientMessageId: clientMessageIdSchema,
+});
+export type SocketSendMessage = z.infer<typeof socketSendMessageSchema>;
+
+export const socketJoinSchema = z.object({
+  conversationId: z.string().uuid(),
+});
+export type SocketJoin = z.infer<typeof socketJoinSchema>;
+
+export const socketReceiptReadSchema = z.object({
+  conversationId: z.string().uuid(),
+  lastReadMessageId: z.string().uuid(),
+});
+export type SocketReceiptRead = z.infer<typeof socketReceiptReadSchema>;
+
+export const socketTypingSchema = z.object({
+  conversationId: z.string().uuid(),
+});
+export type SocketTyping = z.infer<typeof socketTypingSchema>;
+
+/** What a peer sees when someone is typing. Carries no text, and is never stored. */
+export const typingNoticeSchema = z.object({
+  conversationId: z.string().uuid(),
+  userId: z.string().uuid(),
+  typing: z.boolean(),
+});
+export type TypingNotice = z.infer<typeof typingNoticeSchema>;
+
+/** The socket event names, in one place so server and client cannot drift apart. */
+export const REALTIME_EVENTS = {
+  join: 'conversation:join',
+  messageSend: 'message:send',
+  messageCreated: 'message:created',
+  receiptRead: 'receipt:read',
+  typingStart: 'typing:start',
+  typingStop: 'typing:stop',
+  typing: 'typing',
+  error: 'realtime:error',
+} as const;

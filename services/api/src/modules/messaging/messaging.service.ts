@@ -107,6 +107,8 @@ export interface MessageRecord {
   status: MessageStatus;
   body: string | null;
   revisionCount: number;
+  /** Set only for a message that arrived over a socket - see the schema. */
+  clientMessageId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -134,11 +136,18 @@ export interface MessagingRepository {
     params: { limit: number; before: { createdAt: string; id: string } | null }
   ): Promise<MessageRecord[]>;
   findMessage(messageId: string): Promise<MessageRecord | null>;
+  /**
+   * Inserts, or returns the message already stored under the same
+   * `clientMessageId` in this conversation. Deduplication belongs here
+   * rather than in a check-then-insert above it: only the database can
+   * decide a race between two retries of the same send.
+   */
   insertMessage(input: {
     conversationId: string;
     senderId: string | null;
     senderKind: MessageSenderKind;
     body: string;
+    clientMessageId?: string | null;
   }): Promise<MessageRecord>;
   addRevision(input: { messageId: string; editorId: string; body: string }): Promise<MessageRecord>;
   softDelete(input: { messageId: string; actorId: string; correlationId: string }): Promise<MessageRecord>;
@@ -167,6 +176,8 @@ export interface MessageView {
   body: string | null;
   revisionCount: number;
   edited: boolean;
+  /** Echoed back so a sender can match this against the message it drew optimistically. */
+  clientMessageId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -203,6 +214,7 @@ export function toMessageView(record: MessageRecord): MessageView {
     body: record.status === 'DELETED' ? null : record.body,
     revisionCount: record.revisionCount,
     edited: record.revisionCount > 1,
+    clientMessageId: record.clientMessageId,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
@@ -324,7 +336,7 @@ export async function sendMessage(
   repo: MessagingRepository,
   conversationId: string,
   senderId: string,
-  input: { body: string }
+  input: { body: string; clientMessageId?: string | null }
 ): Promise<MessageView> {
   await requireMembership(repo, conversationId, senderId);
   const record = await repo.insertMessage({
@@ -332,6 +344,7 @@ export async function sendMessage(
     senderId,
     senderKind: 'USER',
     body: input.body,
+    clientMessageId: input.clientMessageId ?? null,
   });
   return toMessageView(record);
 }

@@ -5,6 +5,10 @@ import { buildApp } from './app';
 import databasePlugin from './plugins/database';
 import redisPlugin from './plugins/redis';
 import { S3StorageProvider } from './modules/storage/s3-storage-provider';
+import { createRealtimeGateway, type RealtimeGateway } from './modules/messaging/realtime.gateway';
+import { createPrismaMessagingRepository } from './modules/messaging/messaging.repository';
+import { createPrismaSessionLiveness } from './modules/messaging/realtime-auth';
+import { REALTIME_SEND_RATE_LIMIT, REALTIME_SEND_RATE_WINDOW_SECONDS } from './modules/messaging/realtime.gateway';
 import { createSmsProvider } from './modules/auth/sms-provider';
 import { createRedisRateLimiter, type RateLimiter } from './modules/auth/rate-limiter';
 import { REACTION_RATE_LIMIT, REACTION_RATE_WINDOW_SECONDS } from './modules/cards/public-comment.route';
@@ -109,12 +113,32 @@ async function main() {
   await app.register(databasePlugin);
   await app.register(redisPlugin);
 
+  // The gateway can only be built after listen - Socket.IO needs the real
+  // HTTP server, which Fastify does not create until then - but Fastify
+  // refuses addHook once it is listening. So the hook is registered now and
+  // closes over a holder the gateway fills in below.
+  let io: RealtimeGateway | null = null;
+  app.addHook('onClose', async () => {
+    await io?.close();
+  });
+
   try {
     await app.listen({ port: env.PORT, host: env.HOST });
   } catch (err) {
     app.log.error(err);
     process.exit(1);
   }
+
+  // The proxy already forwards /socket.io/* here (see deploy/Caddyfile,
+  // wired in Task 04 ahead of this).
+  io = createRealtimeGateway(app.server, {
+    sessionHmacKey: env.SESSION_HMAC_KEY,
+    appOrigin: env.APP_ORIGIN,
+    messagingRepository: createPrismaMessagingRepository(getPrisma()),
+    sessionLiveness: createPrismaSessionLiveness(getPrisma()),
+    redis: app.redis,
+    sendRateLimiter: createRedisRateLimiter(app.redis, REALTIME_SEND_RATE_LIMIT, REALTIME_SEND_RATE_WINDOW_SECONDS),
+  });
 }
 
 main().catch((err) => {

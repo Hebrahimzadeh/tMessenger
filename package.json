@@ -25,7 +25,8 @@
     "@taavon/contracts": "*",
     "next": "16.2.11",
     "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "react-dom": "19.2.0",
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

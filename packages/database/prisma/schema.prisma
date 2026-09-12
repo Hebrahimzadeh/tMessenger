@@ -932,6 +932,14 @@ model Message {
   /// a soft delete clears it while the revisions stay for the M6 report path.
   body           String?
   revisionCount  Int               @default(1)
+  /// The id the sending client generated before it sent (Task 20). A socket
+  /// that reconnects mid-send cannot know whether its message landed, so it
+  /// simply sends again with the same id; the unique index below turns the
+  /// retry into a no-op that returns the original. This is what makes
+  /// "پیام گم/دوتایی نمی‌شود" true across a dropped connection rather than
+  /// merely unlikely. Null for a message that arrived over REST, which is a
+  /// plain request/response and needs no such recovery.
+  clientMessageId String?          @db.VarChar(64)
   createdAt      DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime          @updatedAt @db.Timestamptz(6)
   deletedAt      DateTime?         @db.Timestamptz(6)
@@ -943,6 +951,7 @@ model Message {
   /// Serves the keyset page directly: newest first within one conversation,
   /// with `id` breaking ties on identical timestamps so a page boundary is
   /// stable rather than occasionally repeating or skipping a row.
+  @@unique([conversationId, clientMessageId])
   @@index([conversationId, createdAt, id])
   @@map("messages")
 }
