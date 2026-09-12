@@ -23,6 +23,7 @@ import { auditReuseDetected, recordAcceptanceAndAudit } from './auth-audit';
 import { CSRF_COOKIE, csrfCookieOptions, csrfMatches, generateCsrfToken } from './csrf';
 import { createRedisOtpChallengeRepository } from './otp-challenge.repository';
 import { createRedisRateLimiter } from './rate-limiter';
+import { normalizePhone } from './phone';
 import { DevSmsSinkProvider, type SmsProvider } from './sms-provider';
 import { createPrismaSessionRepository } from './session.repository';
 import {
@@ -102,9 +103,28 @@ export async function authRoutes(app: FastifyInstance, opts: AuthRouteOptions) {
   // separate process with no other way to observe it.
   if (opts.smsProvider instanceof DevSmsSinkProvider) {
     const devSink = opts.smsProvider;
-    app.get<{ Querystring: { phone?: string } }>('/otp/_dev-sink', async (request) => {
-      const phone = request.query.phone;
-      return { code: phone ? (devSink.lastCodeFor(phone) ?? null) : null };
+    app.get<{ Querystring: { phone?: string; country?: string } }>('/otp/_dev-sink', async (request) => {
+      const { phone, country } = request.query;
+      if (!phone) return { code: null };
+
+      // The sink is keyed by the E.164 number the service actually sent to,
+      // but the login screen only has the raw text the person typed. When a
+      // country is supplied, normalize with the very same helper requestOtp
+      // uses, so the two agree without any of that logic being duplicated
+      // into the browser. Callers that already hold E.164 (the Playwright
+      // specs) simply omit `country` and are unaffected.
+      let lookup = phone;
+      if (country) {
+        try {
+          lookup = normalizePhone(phone, country);
+        } catch {
+          // Same answer as "no code for that number" - an unparseable phone
+          // or unsupported country never had a code sent to it either.
+          return { code: null };
+        }
+      }
+
+      return { code: devSink.lastCodeFor(lookup) ?? null };
     });
   }
 

@@ -326,4 +326,52 @@ describe('GET /otp/_dev-sink', () => {
     expect(response.statusCode).toBe(404);
     await app.close();
   });
+
+  // The login screen only ever holds the raw text the person typed, so it
+  // passes that plus the country and lets the route normalize - otherwise
+  // normalizePhone's rules would have to be duplicated into the browser.
+  it('normalizes a locally-formatted number when a country is given', async () => {
+    const smsProvider = new DevSmsSinkProvider();
+    await smsProvider.sendOtp('+989121234567', '482913');
+    const app = buildApp(fakeService(), false, smsProvider);
+
+    const response = await app.inject({ method: 'GET', url: '/v1/auth/otp/_dev-sink?phone=09121234567&country=IR' });
+
+    expect(response.json()).toEqual({ code: '482913' });
+    await app.close();
+  });
+
+  it('still accepts a bare E.164 number with no country, as the E2E specs send', async () => {
+    const smsProvider = new DevSmsSinkProvider();
+    await smsProvider.sendOtp('+989121234567', '482913');
+    const app = buildApp(fakeService(), false, smsProvider);
+
+    const response = await app.inject({ method: 'GET', url: '/v1/auth/otp/_dev-sink?phone=%2B989121234567' });
+
+    expect(response.json()).toEqual({ code: '482913' });
+    await app.close();
+  });
+
+  it('returns null rather than an error for a number that cannot be parsed', async () => {
+    const smsProvider = new DevSmsSinkProvider();
+    await smsProvider.sendOtp('+989121234567', '482913');
+    const app = buildApp(fakeService(), false, smsProvider);
+
+    const response = await app.inject({ method: 'GET', url: '/v1/auth/otp/_dev-sink?phone=not-a-number&country=IR' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ code: null });
+    await app.close();
+  });
+
+  it('returns null for an unsupported country instead of leaking that the number exists', async () => {
+    const smsProvider = new DevSmsSinkProvider();
+    await smsProvider.sendOtp('+989121234567', '482913');
+    const app = buildApp(fakeService(), false, smsProvider);
+
+    const response = await app.inject({ method: 'GET', url: '/v1/auth/otp/_dev-sink?phone=09121234567&country=ZZ' });
+
+    expect(response.json()).toEqual({ code: null });
+    await app.close();
+  });
 });

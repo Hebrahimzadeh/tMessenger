@@ -20,6 +20,20 @@ async function importLoginFlow() {
   return mod.LoginFlow;
 }
 
+/**
+ * Routes by URL rather than by call order. The OTP step also probes
+ * /auth/otp/_dev-sink (test deployments have no SMS gateway), so the
+ * request/verify pair is no longer simply the first and second fetch.
+ */
+function routeFetch(handlers: { request: () => Response; verify: () => Response }) {
+  return vi.fn().mockImplementation(async (url: string) => {
+    if (url.includes('/auth/otp/_dev-sink')) return jsonResponse(200, { code: null });
+    if (url.includes('/auth/otp/request')) return handlers.request();
+    if (url.includes('/auth/otp/verify')) return handlers.verify();
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as unknown as typeof fetch;
+}
+
 describe('LoginFlow', () => {
   afterEach(() => {
     global.fetch = originalFetch;
@@ -33,10 +47,10 @@ describe('LoginFlow', () => {
   });
 
   it('moves to the OTP step after a successful phone submission, then redirects to `next` on successful verify', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(202, { challengeId: 'c1', expiresInSeconds: 300, termsVersion: 1, privacyVersion: 1 }))
-      .mockResolvedValueOnce(jsonResponse(200, { userId: '11111111-1111-4111-8111-111111111111' })) as unknown as typeof fetch;
+    global.fetch = routeFetch({
+      request: () => jsonResponse(202, { challengeId: 'c1', expiresInSeconds: 300, termsVersion: 1, privacyVersion: 1 }),
+      verify: () => jsonResponse(200, { userId: '11111111-1111-4111-8111-111111111111' }),
+    });
 
     const LoginFlow = await importLoginFlow();
     render(<LoginFlow next="/chats/42" />);
@@ -54,10 +68,9 @@ describe('LoginFlow', () => {
   });
 
   it('bounces back to the phone step with a notice when the legal version changed', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(202, { challengeId: 'c1', expiresInSeconds: 300, termsVersion: 1, privacyVersion: 1 }))
-      .mockResolvedValueOnce(
+    global.fetch = routeFetch({
+      request: () => jsonResponse(202, { challengeId: 'c1', expiresInSeconds: 300, termsVersion: 1, privacyVersion: 1 }),
+      verify: () =>
         jsonResponse(422, {
           error: {
             code: 'LEGAL_VERSION_CHANGED',
@@ -65,8 +78,8 @@ describe('LoginFlow', () => {
             correlationId: 'r1',
             details: [{ termsVersion: 2, privacyVersion: 1, termsUrl: 'https://x/terms', privacyUrl: 'https://x/privacy' }],
           },
-        })
-      ) as unknown as typeof fetch;
+        }),
+    });
 
     const LoginFlow = await importLoginFlow();
     render(<LoginFlow next="/chats" />);

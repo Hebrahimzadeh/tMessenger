@@ -49,6 +49,38 @@ export function OtpForm({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [resending, setResending] = useState(false);
+  // Only ever set on a deployment with no real SMS gateway - see the effect below.
+  const [devCode, setDevCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    // A test deployment runs without a contracted SMS gateway, so the API
+    // swaps in a sink that records the code instead of sending it, and
+    // exposes this endpoint only while that sink is the configured provider
+    // (createSmsProvider never returns it when NODE_ENV is production, and
+    // the route is registered only if it did). In production the request
+    // 404s, the catch below swallows it, and nothing is rendered - there is
+    // no flag here that could be turned on by mistake.
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const result = await apiFetch<{ code?: string | null }>(
+          `/auth/otp/_dev-sink?phone=${encodeURIComponent(phone)}&country=${encodeURIComponent(country)}`
+        );
+        if (!cancelled && typeof result?.code === 'string' && result.code.length > 0) {
+          setDevCode(result.code);
+          setCode(result.code);
+        }
+      } catch {
+        // Production (no such route), or no code recorded yet. Either way
+        // the person just types the code themselves, exactly as before.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [challenge.challengeId, phone, country]);
 
   useEffect(() => {
     // Keyed on challenge.challengeId, not secondsLeft: one interval per
@@ -121,6 +153,18 @@ export function OtpForm({
     <div dir="rtl" className="p-6 text-right">
       <h1 className="text-xl font-bold text-gray-900 mb-2">کد تأیید را وارد کنید</h1>
       <p className="text-sm text-gray-500 mb-6">کد شش‌رقمی ارسال‌شده به شمارهٔ {phone} را وارد کنید.</p>
+
+      {devCode && (
+        <p
+          data-testid="dev-sink-code"
+          role="status"
+          className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+        >
+          حالت آزمایشی: پیامکی ارسال نمی‌شود. کد تأیید{' '}
+          <span className="font-bold tracking-[0.3em]">{toPersianDigits(devCode)}</span> است و در کادر زیر وارد شده
+          است.
+        </p>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
         <div>
