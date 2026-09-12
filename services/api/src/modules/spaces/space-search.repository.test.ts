@@ -28,7 +28,35 @@ describe.skipIf(!databaseAvailable)('SpaceSearchRepository: real Postgres', () =
   let followerId: string;
   const createdSpaceIds: string[] = [];
 
+  // Every slug this suite creates starts here, which is what makes the
+  // recovery purge in beforeAll possible - and also what makes it necessary.
+  const SLUG_PREFIX = 'search-test-';
+
+  // Deletes the given spaces and every row that references them, children
+  // first. Callers select the spaces either by the ids this run recorded (the
+  // normal teardown) or by slug prefix (the recovery path).
+  async function purgeSpaces(where: { id: { in: string[] } } | { slug: { startsWith: string } }) {
+    const prisma = getPrisma();
+    const ids = (await prisma.space.findMany({ where, select: { id: true } })).map((s) => s.id);
+    if (ids.length === 0) return;
+    await prisma.spaceFollower.deleteMany({ where: { spaceId: { in: ids } } });
+    await prisma.spaceRoleMembership.deleteMany({ where: { spaceId: { in: ids } } });
+    await prisma.spaceParticipationRole.deleteMany({ where: { spaceId: { in: ids } } });
+    await prisma.spaceDefinitionVersion.deleteMany({ where: { spaceId: { in: ids } } });
+    await prisma.outboxEvent.deleteMany({ where: { aggregateId: { in: ids } } });
+    await prisma.space.deleteMany({ where: { id: { in: ids } } });
+  }
+
   beforeAll(async () => {
+    // These slugs are deterministic, so a run that dies before afterEach gets
+    // to run (a dropped connection mid-suite is enough) leaves rows behind
+    // that make every later run on the same database fail on the
+    // spaces_slug_key unique constraint - and fail in a way that leaks the
+    // next batch of rows too, so it never recovers on its own. Purging the
+    // suite's own slug namespace up front makes the suite idempotent against
+    // a persistent database instead of only a throwaway one.
+    await purgeSpaces({ slug: { startsWith: SLUG_PREFIX } });
+
     const user = await getPrisma().user.create({ data: {} });
     const follower = await getPrisma().user.create({ data: {} });
     userId = user.id;
@@ -36,12 +64,7 @@ describe.skipIf(!databaseAvailable)('SpaceSearchRepository: real Postgres', () =
   });
 
   afterEach(async () => {
-    await getPrisma().spaceFollower.deleteMany({ where: { spaceId: { in: createdSpaceIds } } });
-    await getPrisma().spaceRoleMembership.deleteMany({ where: { spaceId: { in: createdSpaceIds } } });
-    await getPrisma().spaceParticipationRole.deleteMany({ where: { spaceId: { in: createdSpaceIds } } });
-    await getPrisma().spaceDefinitionVersion.deleteMany({ where: { spaceId: { in: createdSpaceIds } } });
-    await getPrisma().outboxEvent.deleteMany({ where: { aggregateId: { in: createdSpaceIds } } });
-    await getPrisma().space.deleteMany({ where: { id: { in: createdSpaceIds } } });
+    await purgeSpaces({ id: { in: createdSpaceIds } });
     createdSpaceIds.length = 0;
   });
 
@@ -50,7 +73,7 @@ describe.skipIf(!databaseAvailable)('SpaceSearchRepository: real Postgres', () =
   });
 
   async function createPublishedSpace(title: string, purpose: string, slugSuffix: string) {
-    const { id } = await spaceRepo.createDraft({ title, slug: `search-test-${slugSuffix}`, policyVersion: 1, creatorId: userId });
+    const { id } = await spaceRepo.createDraft({ title, slug: `${SLUG_PREFIX}${slugSuffix}`, policyVersion: 1, creatorId: userId });
     createdSpaceIds.push(id);
     await spaceRepo.createNewVersion({
       spaceId: id,
