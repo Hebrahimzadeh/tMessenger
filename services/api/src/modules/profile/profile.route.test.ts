@@ -159,7 +159,7 @@ describe('GET /users/:username', () => {
   it('is public - no session required', async () => {
     const app = buildApp(
       fakeProfileRepo(),
-      fakePublicProfileRepo({ username: 'ali_2000', displayName: 'علی', bio: null, phoneVisibility: 'PRIVATE', phoneCiphertext: null })
+      fakePublicProfileRepo({ userId: '00000000-0000-4000-8000-000000000001', username: 'ali_2000', displayName: 'علی', bio: null, phoneVisibility: 'PRIVATE', phoneCiphertext: null })
     );
     const response = await app.inject({ method: 'GET', url: '/v1/users/ali_2000' });
     expect(response.statusCode).toBe(200);
@@ -177,7 +177,7 @@ describe('GET /users/:username', () => {
   it('never returns a phoneE164 field when PRIVATE', async () => {
     const app = buildApp(
       fakeProfileRepo(),
-      fakePublicProfileRepo({ username: 'ali_2000', displayName: 'علی', bio: null, phoneVisibility: 'PRIVATE', phoneCiphertext: 'ciphertext' })
+      fakePublicProfileRepo({ userId: '00000000-0000-4000-8000-000000000001', username: 'ali_2000', displayName: 'علی', bio: null, phoneVisibility: 'PRIVATE', phoneCiphertext: 'ciphertext' })
     );
     const response = await app.inject({ method: 'GET', url: '/v1/users/ali_2000' });
     expect(response.json().phoneE164).toBeNull();
@@ -189,7 +189,7 @@ describe('GET /users/:username', () => {
     const publicRepo: PublicProfileRepository = {
       async findPublicByUsername(usernameLower) {
         receivedUsername = usernameLower;
-        return { username: 'ali_2000', displayName: 'علی', bio: null, phoneVisibility: 'PRIVATE', phoneCiphertext: null };
+        return { userId: '00000000-0000-4000-8000-000000000001', username: 'ali_2000', displayName: 'علی', bio: null, phoneVisibility: 'PRIVATE', phoneCiphertext: null };
       },
     };
     const app = buildApp(fakeProfileRepo(), publicRepo);

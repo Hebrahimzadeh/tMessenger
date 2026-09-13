@@ -898,6 +898,14 @@ model ConversationMember {
   conversationId String   @db.Uuid
   userId         String   @db.Uuid
   createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  /// Per-person, per-conversation preferences (Task 21). The member row is
+  /// already one per person, so this is where "mute the assistant for me"
+  /// belongs - no second table, and one person's choice cannot affect the
+  /// other side of a conversation. Hiding removes a thread from the list
+  /// only: the conversation, its messages and every route to it stay, which
+  /// is what "hide حساب یا قابلیت دسترسی دوباره ... را حذف نکند" requires.
+  mutedAt        DateTime? @db.Timestamptz(6)
+  hiddenAt       DateTime? @db.Timestamptz(6)
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
   user         User         @relation("ConversationMemberUser", fields: [userId], references: [id], onDelete: Restrict)
@@ -909,6 +917,18 @@ model ConversationMember {
 enum MessageStatus {
   VISIBLE
   DELETED
+}
+
+/// Whether an assistant message carries a suggestion awaiting the person's
+/// decision. NONE is every ordinary message. The point of the enum is that
+/// a suggestion cannot quietly become an action: nothing reads a proposal
+/// as authority to do anything while it sits at PENDING, and only the
+/// person it was shown to can move it.
+enum MessageProposalState {
+  NONE
+  PENDING
+  CONFIRMED
+  REJECTED
 }
 
 /// A private message. Text lives here and in MessageRevision and nowhere
@@ -940,6 +960,13 @@ model Message {
   /// merely unlikely. Null for a message that arrived over REST, which is a
   /// plain request/response and needs no such recovery.
   clientMessageId String?          @db.VarChar(64)
+  /// What the assistant is suggesting, rendered as a preview the person can
+  /// edit, confirm or reject (Task 21). Never set on a message from a
+  /// person. Holding it here rather than executing anything is the whole
+  /// mechanism behind "بدون تأیید هیچ domain command ارسال نشود".
+  proposedAction Json?
+  proposalState  MessageProposalState @default(NONE)
+  proposalDecidedAt DateTime?      @db.Timestamptz(6)
   createdAt      DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime          @updatedAt @db.Timestamptz(6)
   deletedAt      DateTime?         @db.Timestamptz(6)

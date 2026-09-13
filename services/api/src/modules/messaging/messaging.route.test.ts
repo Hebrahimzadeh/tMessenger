@@ -23,6 +23,7 @@ function fakeRepo() {
   const conversations = new Map<string, ConversationRecord>();
   const messages = new Map<string, MessageRecord>();
   const receipts = new Map<string, { lastReadMessageId: string | null; lastReadAt: Date }>();
+  const prefs = new Map<string, { muted: boolean; hidden: boolean }>();
   let clock = 0;
 
   const direct: ConversationRecord = {
@@ -74,7 +75,10 @@ function fakeRepo() {
       return created;
     },
     async listConversationsForUser(userId, { limit }) {
-      return [...conversations.values()].filter((c) => c.memberIds.includes(userId)).slice(0, limit);
+      return [...conversations.values()]
+        .filter((c) => c.memberIds.includes(userId))
+        .filter((c) => !(prefs.get(`${c.id}:${userId}`)?.hidden ?? false))
+        .slice(0, limit);
     },
     async countUnread() {
       return 0;
@@ -104,6 +108,8 @@ function fakeRepo() {
         body,
         revisionCount: 1,
         clientMessageId: clientMessageId ?? null,
+        proposedAction: null,
+        proposalState: 'NONE',
         createdAt: new Date((clock += 1000)),
         updatedAt: new Date(clock),
       };
@@ -128,9 +134,24 @@ function fakeRepo() {
       receipts.set(`${conversationId}:${userId}`, { lastReadMessageId, lastReadAt: at });
       return { conversationId, userId, lastReadMessageId, lastReadAt: at };
     },
+    async getPreferences(conversationId, userId) {
+      return prefs.get(`${conversationId}:${userId}`) ?? { muted: false, hidden: false };
+    },
+    async setPreferences(conversationId, userId, next) {
+      const key = `${conversationId}:${userId}`;
+      const current = prefs.get(key) ?? { muted: false, hidden: false };
+      const updated = { muted: next.muted ?? current.muted, hidden: next.hidden ?? current.hidden };
+      prefs.set(key, updated);
+      return updated;
+    },
+    async decideProposal({ messageId, decision }) {
+      const m = messages.get(messageId)!;
+      m.proposalState = decision === 'CONFIRM' ? 'CONFIRMED' : 'REJECTED';
+      return m;
+    },
   };
 
-  return { repo, directId: direct.id };
+  return { repo, directId: direct.id, messages };
 }
 
 function buildApp(repo: MessagingRepository) {
@@ -488,5 +509,187 @@ describe('private messaging over HTTP', () => {
     expect(response.json().error.code).toBe('INVALID_CURSOR');
 
     await app.close();
+  });
+
+  describe('muting and hiding, for one person only', () => {
+    it('takes a hidden thread out of the list without touching anything else', async () => {
+      const { repo, directId } = fakeRepo();
+      const app = buildApp(repo);
+
+      const before = await app.inject({ method: 'GET', url: '/v1/conversations', cookies: cookieFor(ALICE) });
+      expect((before.json().items as { id: string }[]).map((c) => c.id)).toContain(directId);
+
+      const hidden = await app.inject({
+        method: 'PATCH',
+        url: `/v1/conversations/${directId}/preferences`,
+        cookies: cookieFor(ALICE),
+        payload: { hidden: true },
+      });
+      expect(hidden.statusCode).toBe(200);
+      expect(hidden.json()).toMatchObject({ hidden: true });
+
+      const after = await app.inject({ method: 'GET', url: '/v1/conversations', cookies: cookieFor(ALICE) });
+      expect((after.json().items as { id: string }[]).map((c) => c.id)).not.toContain(directId);
+
+      // Still fully reachable by id - hiding is a list preference, not a
+      // removal, and the messages are untouched.
+      const stillThere = await app.inject({
+        method: 'GET',
+        url: `/v1/conversations/${directId}/messages`,
+        cookies: cookieFor(ALICE),
+      });
+      expect(stillThere.statusCode).toBe(200);
+
+      await app.close();
+    });
+
+    it('hides for one person without hiding for the other', async () => {
+      const { repo, directId } = fakeRepo();
+      const app = buildApp(repo);
+
+      await app.inject({
+        method: 'PATCH',
+        url: `/v1/conversations/${directId}/preferences`,
+        cookies: cookieFor(ALICE),
+        payload: { hidden: true },
+      });
+
+      const bobs = await app.inject({ method: 'GET', url: '/v1/conversations', cookies: cookieFor(BOB) });
+      expect((bobs.json().items as { id: string }[]).map((c) => c.id)).toContain(directId);
+
+      await app.close();
+    });
+
+    it('always serves the assistant thread, even hidden - that is how someone gets back to it', async () => {
+      const { repo } = fakeRepo();
+      const app = buildApp(repo);
+
+      const assistant = await app.inject({ method: 'GET', url: '/v1/conversations/assistant', cookies: cookieFor(ALICE) });
+      const assistantId = assistant.json().id as string;
+
+      await app.inject({
+        method: 'PATCH',
+        url: `/v1/conversations/${assistantId}/preferences`,
+        cookies: cookieFor(ALICE),
+        payload: { hidden: true },
+      });
+
+      const list = await app.inject({ method: 'GET', url: '/v1/conversations', cookies: cookieFor(ALICE) });
+      expect((list.json().items as { id: string }[]).map((c) => c.id)).not.toContain(assistantId);
+
+      const reached = await app.inject({ method: 'GET', url: '/v1/conversations/assistant', cookies: cookieFor(ALICE) });
+      expect(reached.statusCode).toBe(200);
+      expect(reached.json()).toMatchObject({ id: assistantId, hidden: true });
+
+      await app.close();
+    });
+
+    it('mutes without hiding, and each flag is independent', async () => {
+      const { repo, directId } = fakeRepo();
+      const app = buildApp(repo);
+
+      const muted = await app.inject({
+        method: 'PATCH',
+        url: `/v1/conversations/${directId}/preferences`,
+        cookies: cookieFor(ALICE),
+        payload: { muted: true },
+      });
+      expect(muted.json()).toMatchObject({ muted: true, hidden: false });
+
+      const unmuted = await app.inject({
+        method: 'PATCH',
+        url: `/v1/conversations/${directId}/preferences`,
+        cookies: cookieFor(ALICE),
+        payload: { muted: false },
+      });
+      expect(unmuted.json()).toMatchObject({ muted: false, hidden: false });
+
+      await app.close();
+    });
+
+    it('refuses a non-member, and an empty body', async () => {
+      const { repo, directId } = fakeRepo();
+      const app = buildApp(repo);
+
+      const stranger = await app.inject({
+        method: 'PATCH',
+        url: `/v1/conversations/${directId}/preferences`,
+        cookies: cookieFor(MALLORY),
+        payload: { muted: true },
+      });
+      expect(stranger.statusCode).toBe(404);
+
+      const empty = await app.inject({
+        method: 'PATCH',
+        url: `/v1/conversations/${directId}/preferences`,
+        cookies: cookieFor(ALICE),
+        payload: {},
+      });
+      expect(empty.statusCode).toBe(400);
+
+      await app.close();
+    });
+  });
+
+  describe('deciding on what the assistant suggested', () => {
+    it('refuses a decision on an ordinary message from a person', async () => {
+      const { repo, directId } = fakeRepo();
+      const app = buildApp(repo);
+
+      const sent = await app.inject({
+        method: 'POST',
+        url: `/v1/conversations/${directId}/messages`,
+        cookies: cookieFor(ALICE),
+        payload: { body: 'یک پیام معمولی' },
+      });
+
+      const decided = await app.inject({
+        method: 'POST',
+        url: `/v1/messages/${sent.json().id}/proposal`,
+        cookies: cookieFor(ALICE),
+        payload: { decision: 'CONFIRM' },
+      });
+      expect(decided.statusCode).toBe(422);
+      expect(decided.json().error.code).toBe('NO_PENDING_PROPOSAL');
+
+      await app.close();
+    });
+
+    it('reports a message that does not exist as not found', async () => {
+      const { repo } = fakeRepo();
+      const app = buildApp(repo);
+
+      const decided = await app.inject({
+        method: 'POST',
+        url: `/v1/messages/${randomUUID()}/proposal`,
+        cookies: cookieFor(ALICE),
+        payload: { decision: 'CONFIRM' },
+      });
+      expect(decided.statusCode).toBe(404);
+
+      await app.close();
+    });
+
+    it('rejects a decision that is neither confirm nor reject', async () => {
+      const { repo, directId } = fakeRepo();
+      const app = buildApp(repo);
+
+      const sent = await app.inject({
+        method: 'POST',
+        url: `/v1/conversations/${directId}/messages`,
+        cookies: cookieFor(ALICE),
+        payload: { body: 'x' },
+      });
+
+      const decided = await app.inject({
+        method: 'POST',
+        url: `/v1/messages/${sent.json().id}/proposal`,
+        cookies: cookieFor(ALICE),
+        payload: { decision: 'PUBLISH_IT_ANYWAY' },
+      });
+      expect(decided.statusCode).toBe(400);
+
+      await app.close();
+    });
   });
 });

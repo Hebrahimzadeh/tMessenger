@@ -133,6 +133,7 @@ export async function updateMyProfile(
 }
 
 export interface PublicProfileRecord {
+  userId: string;
   username: string;
   displayName: string;
   bio: string | null;
@@ -166,6 +167,7 @@ export async function getPublicProfile(
       : null;
 
   return {
+    userId: record.userId,
     username: record.username,
     displayName: record.displayName,
     bio: record.bio,

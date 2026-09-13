@@ -51,6 +51,8 @@ function message(over: Partial<MessageRecord> = {}): MessageRecord {
     body: 'سلام',
     revisionCount: 1,
     clientMessageId: null,
+    proposedAction: null,
+    proposalState: 'NONE',
     createdAt: new Date('2026-09-01T10:05:00.000Z'),
     updatedAt: new Date('2026-09-01T10:05:00.000Z'),
     ...over,
@@ -76,6 +78,9 @@ function fakeRepo(over: Partial<MessagingRepository> = {}): MessagingRepository 
     addRevision: notStubbed('addRevision'),
     softDelete: notStubbed('softDelete'),
     upsertReceipt: notStubbed('upsertReceipt'),
+    getPreferences: notStubbed('getPreferences'),
+    setPreferences: notStubbed('setPreferences'),
+    decideProposal: notStubbed('decideProposal'),
     ...over,
   } as MessagingRepository;
 }
@@ -86,6 +91,7 @@ function repoWithMembers(members: string[], over: Partial<MessagingRepository> =
     findConversation: async () => conversation({ memberIds: members }),
     isMember: async (_c, userId) => members.includes(userId),
     countUnread: async () => 0,
+    getPreferences: async () => ({ muted: false, hidden: false }),
     ...over,
   });
 }
@@ -140,6 +146,7 @@ describe('opening a direct conversation', () => {
     const repo = fakeRepo({
       userExists: async () => true,
       countUnread: async () => 0,
+      getPreferences: async () => ({ muted: false, hidden: false }),
       getOrCreateDirect: async (a, b) => {
         calls.push([a, b]);
         return conversation();
@@ -172,6 +179,7 @@ describe('the assistant thread', () => {
     const assistant = conversation({ kind: 'SYSTEM_ASSISTANT', memberIds: [ALICE] });
     const repo = fakeRepo({
       countUnread: async () => 0,
+      getPreferences: async () => ({ muted: false, hidden: false }),
       getOrCreateAssistant: async () => {
         created += 1;
         return assistant;
@@ -189,6 +197,7 @@ describe('the assistant thread', () => {
   it('has only its owner as a member - the assistant itself is not one, so there is no account to join or impersonate', async () => {
     const repo = fakeRepo({
       countUnread: async () => 0,
+      getPreferences: async () => ({ muted: false, hidden: false }),
       getOrCreateAssistant: async () => conversation({ kind: 'SYSTEM_ASSISTANT', memberIds: [ALICE] }),
     });
 
@@ -389,7 +398,11 @@ describe('pagination', () => {
       conversation({ id: 'c2', lastMessageAt: new Date('2026-09-02T10:00:00.000Z') }),
       conversation({ id: 'c3', lastMessageAt: new Date('2026-09-01T10:00:00.000Z') }),
     ];
-    const repo = fakeRepo({ countUnread: async () => 0, listConversationsForUser: async () => rows });
+    const repo = fakeRepo({
+      countUnread: async () => 0,
+      getPreferences: async () => ({ muted: false, hidden: false }),
+      listConversationsForUser: async () => rows,
+    });
 
     const page = await listConversations(repo, ALICE, { limit: 2 });
     expect(page.items.map((c) => c.id)).toEqual(['c1', 'c2']);
@@ -407,8 +420,11 @@ describe('what a conversation and a message look like on the wire', () => {
     for (const member of view.members) {
       expect(Object.keys(member)).toEqual(['userId']);
     }
+    // The exact key set, deliberately. Task 21 added `muted`/`hidden`, and
+    // this assertion is what forced that addition to be noticed and named
+    // rather than slipping in - which is the point of pinning the shape.
     expect(Object.keys(view).sort()).toEqual(
-      ['createdAt', 'id', 'kind', 'lastMessageAt', 'members', 'unreadCount'].sort()
+      ['createdAt', 'hidden', 'id', 'kind', 'lastMessageAt', 'members', 'muted', 'unreadCount'].sort()
     );
   });
 

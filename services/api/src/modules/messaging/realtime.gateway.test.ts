@@ -77,6 +77,8 @@ function fakeRepo() {
         body,
         revisionCount: 1,
         clientMessageId: clientMessageId ?? null,
+        proposedAction: null,
+        proposalState: 'NONE',
         createdAt: new Date((clock += 1000)),
         updatedAt: new Date(clock),
       };
@@ -97,6 +99,17 @@ function fakeRepo() {
     },
     async upsertReceipt({ conversationId, userId, lastReadMessageId }) {
       return { conversationId, userId, lastReadMessageId, lastReadAt: new Date((clock += 1000)) };
+    },
+    async getPreferences() {
+      return { muted: false, hidden: false };
+    },
+    async setPreferences(_c, _u, prefs) {
+      return { muted: prefs.muted ?? false, hidden: prefs.hidden ?? false };
+    },
+    async decideProposal({ messageId, decision }) {
+      const m = messages.get(messageId)!;
+      m.proposalState = decision === 'CONFIRM' ? 'CONFIRMED' : 'REJECTED';
+      return m;
     },
   };
 

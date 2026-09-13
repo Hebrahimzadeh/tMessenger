@@ -143,6 +143,7 @@ describe('getPublicProfile', () => {
 
   it('omits phoneE164 (null) when phoneVisibility is PRIVATE, even though a phone identity exists', async () => {
     const repo = fakePublicRepo({
+      userId: '00000000-0000-4000-8000-000000000001',
       username: 'ali_2000',
       displayName: 'علی',
       bio: null,
@@ -155,6 +156,7 @@ describe('getPublicProfile', () => {
 
   it('includes the decrypted phoneE164 when phoneVisibility is PUBLIC', async () => {
     const repo = fakePublicRepo({
+      userId: '00000000-0000-4000-8000-000000000001',
       username: 'ali_2000',
       displayName: 'علی',
       bio: 'سلام',
@@ -162,11 +164,18 @@ describe('getPublicProfile', () => {
       phoneCiphertext: encryptPhone('+989121234567', PHONE_ENCRYPTION_KEY),
     });
     const result = await getPublicProfile(repo, PHONE_ENCRYPTION_KEY, 'ali_2000');
-    expect(result).toEqual({ username: 'ali_2000', displayName: 'علی', bio: 'سلام', phoneE164: '+989121234567' });
+    expect(result).toEqual({
+      userId: '00000000-0000-4000-8000-000000000001',
+      username: 'ali_2000',
+      displayName: 'علی',
+      bio: 'سلام',
+      phoneE164: '+989121234567',
+    });
   });
 
   it('never includes a phoneHash, correlationId, or any official-claim-shaped field, even implicitly', async () => {
     const repo = fakePublicRepo({
+      userId: '00000000-0000-4000-8000-000000000001',
       username: 'ali_2000',
       displayName: 'علی',
       bio: null,
@@ -174,11 +183,16 @@ describe('getPublicProfile', () => {
       phoneCiphertext: encryptPhone('+989121234567', PHONE_ENCRYPTION_KEY),
     });
     const result = await getPublicProfile(repo, PHONE_ENCRYPTION_KEY, 'ali_2000');
-    expect(Object.keys(result!).sort()).toEqual(['bio', 'displayName', 'phoneE164', 'username'].sort());
+    // The exact key set. Task 21 added `userId` so a private conversation can
+    // be opened from a profile; it is an opaque id that appears wherever
+    // people do, and this assertion is what forced it to be named rather than
+    // slipped in. Everything sensitive is still absent.
+    expect(Object.keys(result!).sort()).toEqual(['bio', 'displayName', 'phoneE164', 'userId', 'username'].sort());
   });
 
   it('returns null phoneE164 (not a crash) when PUBLIC but no phone identity exists at all', async () => {
     const repo = fakePublicRepo({
+      userId: '00000000-0000-4000-8000-000000000001',
       username: 'ali_2000',
       displayName: 'علی',
       bio: null,

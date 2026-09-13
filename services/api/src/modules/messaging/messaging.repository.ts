@@ -1,3 +1,4 @@
+import { assistantProposalSchema } from '@taavon/contracts';
 import type { PrismaClient } from '@taavon/database';
 import { createPrismaDirectConversationPort } from './direct-conversation.repository';
 import type { ConversationRecord, MessageRecord, MessagingRepository, ReceiptRecord } from './messaging.service';
@@ -46,12 +47,28 @@ type MessageRow = {
   body: string | null;
   revisionCount: number;
   clientMessageId: string | null;
+  proposedAction: unknown;
+  proposalState: 'NONE' | 'PENDING' | 'CONFIRMED' | 'REJECTED';
   createdAt: Date;
   updatedAt: Date;
 };
 
+/** A stored proposal is re-validated on the way out; anything unrecognised reads as no proposal at all. */
+function parseProposal(raw: unknown): MessageRecord['proposedAction'] {
+  if (!raw) return null;
+  const parsed = assistantProposalSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 function toMessageRecord(row: MessageRow): MessageRecord {
-  return { ...row };
+  const { proposedAction, ...rest } = row;
+  return {
+    ...rest,
+    // Stored as JSON, so it is parsed back through the contract rather than
+    // trusted: a row written by an older shape must not reach the wire
+    // pretending to be a valid proposal.
+    proposedAction: parseProposal(proposedAction),
+  };
 }
 
 async function loadConversation(prisma: PrismaClient, id: string): Promise<ConversationRecord | null> {
@@ -141,7 +158,11 @@ export function createPrismaMessagingRepository(prisma: PrismaClient): Messaging
       // thread nobody has written in yet, with `id` breaking exact ties so
       // the keyset boundary is stable.
       const rows = await prisma.conversation.findMany({
-        where: { members: { some: { userId } } },
+        // A hidden thread leaves this person's list and nothing else - the
+        // conversation, its messages, and every route to it are untouched,
+        // including GET /conversations/assistant, which is how someone gets
+        // back to a hidden assistant.
+        where: { members: { some: { userId, hiddenAt: null } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: CONVERSATION_SHAPE,
       });
@@ -206,7 +227,7 @@ export function createPrismaMessagingRepository(prisma: PrismaClient): Messaging
       return row ? toMessageRecord(row as MessageRow) : null;
     },
 
-    async insertMessage({ conversationId, senderId, senderKind, body, clientMessageId }) {
+    async insertMessage({ conversationId, senderId, senderKind, body, clientMessageId, proposedAction }) {
       // A socket that drops mid-send cannot know whether its message landed,
       // so the client simply sends again with the same id. Checking first
       // handles the ordinary retry; the unique index and the catch below
@@ -229,6 +250,8 @@ export function createPrismaMessagingRepository(prisma: PrismaClient): Messaging
               body,
               revisionCount: 1,
               clientMessageId: clientMessageId ?? null,
+              proposedAction: proposedAction ?? undefined,
+              proposalState: proposedAction ? 'PENDING' : 'NONE',
             },
           });
           await tx.messageRevision.create({
@@ -310,6 +333,39 @@ export function createPrismaMessagingRepository(prisma: PrismaClient): Messaging
         lastReadMessageId: row.lastReadMessageId,
         lastReadAt: row.lastReadAt,
       };
+    },
+
+    async getPreferences(conversationId, userId) {
+      const member = await prisma.conversationMember.findUnique({
+        where: { conversationId_userId: { conversationId, userId } },
+        select: { mutedAt: true, hiddenAt: true },
+      });
+      return { muted: member?.mutedAt !== null && member?.mutedAt !== undefined, hidden: member?.hiddenAt != null };
+    },
+
+    async setPreferences(conversationId, userId, prefs) {
+      const now = new Date();
+      const data: { mutedAt?: Date | null; hiddenAt?: Date | null } = {};
+      if (prefs.muted !== undefined) data.mutedAt = prefs.muted ? now : null;
+      if (prefs.hidden !== undefined) data.hiddenAt = prefs.hidden ? now : null;
+
+      const row = await prisma.conversationMember.update({
+        where: { conversationId_userId: { conversationId, userId } },
+        data,
+        select: { mutedAt: true, hiddenAt: true },
+      });
+      return { muted: row.mutedAt != null, hidden: row.hiddenAt != null };
+    },
+
+    async decideProposal({ messageId, decision }) {
+      const row = await prisma.message.update({
+        where: { id: messageId },
+        data: {
+          proposalState: decision === 'CONFIRM' ? 'CONFIRMED' : 'REJECTED',
+          proposalDecidedAt: new Date(),
+        },
+      });
+      return toMessageRecord(row as MessageRow);
     },
   };
 }

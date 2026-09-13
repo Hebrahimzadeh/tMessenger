@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   conversationListResponseSchema,
+  conversationPreferencesBodySchema,
   conversationViewSchema,
   createDirectConversationBodySchema,
+  proposalDecisionBodySchema,
   editMessageBodySchema,
   markReadBodySchema,
   messageListResponseSchema,
@@ -16,7 +18,9 @@ import { createPrismaMessagingRepository } from './messaging.repository';
 import {
   ConversationNotFoundError,
   createDirectConversation,
+  decideProposal,
   deleteMessage,
+  getConversation,
   editMessage,
   getOrCreateAssistantConversation,
   InvalidMessageCursorError,
@@ -24,10 +28,12 @@ import {
   listMessages,
   markRead,
   MessageNotFoundError,
+  NoPendingProposalError,
   NotMessageAuthorError,
   ReceiptMessageMismatchError,
   SelfConversationError,
   sendMessage,
+  setConversationPreferences,
   UnknownCounterpartError,
   type MessagingRepository,
 } from './messaging.service';
@@ -94,6 +100,18 @@ export async function messagingRoutes(app: FastifyInstance, opts: MessagingRoute
     }
   });
 
+  app.get('/conversations/:conversationId', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const { conversationId } = request.params as { conversationId: string };
+
+    try {
+      return conversationViewSchema.parse(await getConversation(repo(), conversationId, user.userId));
+    } catch (err) {
+      return handleMessagingError(err, request, reply);
+    }
+  });
+
   app.get('/conversations/:conversationId/messages', async (request, reply) => {
     const user = requireSession(request, reply, opts.sessionHmacKey);
     if (!user) return;
@@ -153,6 +171,45 @@ export async function messagingRoutes(app: FastifyInstance, opts: MessagingRoute
     }
   });
 
+  /**
+   * Mute or hide, for the caller alone. Hiding takes the thread out of their
+   * list and does nothing else - the conversation, its messages and every
+   * route back to it stay exactly as they were, which is why the assistant
+   * route above deliberately ignores the flag.
+   */
+  app.patch('/conversations/:conversationId/preferences', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const { conversationId } = request.params as { conversationId: string };
+    const body = conversationPreferencesBodySchema.parse(request.body);
+
+    try {
+      return conversationViewSchema.parse(
+        await setConversationPreferences(repo(), conversationId, user.userId, body)
+      );
+    } catch (err) {
+      return handleMessagingError(err, request, reply);
+    }
+  });
+
+  /**
+   * The person's decision on something the assistant suggested. Nothing acts
+   * on a proposal until this runs, and only the people in the conversation
+   * can run it.
+   */
+  app.post('/messages/:messageId/proposal', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const { messageId } = request.params as { messageId: string };
+    const body = proposalDecisionBodySchema.parse(request.body);
+
+    try {
+      return messageViewSchema.parse(await decideProposal(repo(), messageId, user.userId, body.decision));
+    } catch (err) {
+      return handleMessagingError(err, request, reply);
+    }
+  });
+
   app.post('/conversations/:conversationId/read', async (request, reply) => {
     const user = requireSession(request, reply, opts.sessionHmacKey);
     if (!user) return;
@@ -194,6 +251,9 @@ function handleMessagingError(err: unknown, request: FastifyRequest, reply: Fast
   }
   if (err instanceof ReceiptMessageMismatchError) {
     return reply.code(422).send(apiError(request, 'RECEIPT_MESSAGE_MISMATCH', 'این پیام متعلق به این گفت‌وگو نیست.'));
+  }
+  if (err instanceof NoPendingProposalError) {
+    return reply.code(422).send(apiError(request, 'NO_PENDING_PROPOSAL', 'این پیام تصمیمی در انتظار ندارد.'));
   }
   if (err instanceof InvalidMessageCursorError) {
     return reply.code(400).send(apiError(request, 'INVALID_CURSOR', 'نشانگر صفحه‌بندی معتبر نیست.'));

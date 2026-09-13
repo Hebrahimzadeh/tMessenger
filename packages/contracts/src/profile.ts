@@ -44,6 +44,14 @@ export type MyProfileResponse = z.infer<typeof myProfileResponseSchema>;
 
 /** GET /v1/users/:username - public. `phoneE164` is present only when phoneVisibility is PUBLIC; phoneHash/any official-identity-claim state is never part of this shape. */
 export const publicProfileResponseSchema = z.object({
+  /**
+   * Needed to open a private conversation from a profile (Task 21). An
+   * opaque id, already visible wherever people appear together - a
+   * conversation's members, a card's author - and it discloses nothing on
+   * its own. The phone number below stays governed by its owner's own
+   * visibility setting, unchanged.
+   */
+  userId: z.string().uuid(),
   username: z.string(),
   displayName: z.string(),
   bio: z.string().nullable(),

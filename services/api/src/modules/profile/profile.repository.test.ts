@@ -92,17 +92,26 @@ describe.skipIf(!databaseAvailable)('Profile repositories: real Postgres', () =>
     });
 
     const publicRepo = createPrismaPublicProfileRepository(prisma);
-    const result = await publicRepo.findPublicByUsername('ali_2000');
+    let result;
+    try {
+      result = await publicRepo.findPublicByUsername('ali_2000');
+    } finally {
+      // Cleaned up before the assertion can throw. Leaving this row behind
+      // made the *next* test fail rather than this one, which sends whoever
+      // reads the output looking in the wrong place.
+      await prisma.phoneIdentity.deleteMany({ where: { userId } });
+    }
 
     expect(result).toEqual({
+      // Task 21 added userId so a private conversation can be opened from a
+      // profile; every sensitive field is still absent.
+      userId,
       username: 'ali_2000',
       displayName: 'علی',
       bio: null,
       phoneVisibility: 'PUBLIC',
       phoneCiphertext: 'fake-ciphertext',
     });
-
-    await prisma.phoneIdentity.deleteMany({ where: { userId } });
   });
 
   it('findPublicByUsername returns null phoneCiphertext when the user has no phone identity', async () => {

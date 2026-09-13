@@ -42,6 +42,9 @@ export const conversationViewSchema = z.object({
   lastMessageAt: z.string().datetime().nullable(),
   /** Messages the caller has not read yet. Counted for the caller alone; it never reveals the other side's reading. */
   unreadCount: z.number().int().nonnegative(),
+  /** The caller's own preferences. One person muting a thread never affects the other side. */
+  muted: z.boolean(),
+  hidden: z.boolean(),
 });
 export type ConversationView = z.infer<typeof conversationViewSchema>;
 
@@ -50,6 +53,39 @@ export const conversationListResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>;
+
+export const proposalStateSchema = z.enum(['NONE', 'PENDING', 'CONFIRMED', 'REJECTED']);
+export type ProposalState = z.infer<typeof proposalStateSchema>;
+
+/**
+ * A suggestion from the assistant, shown to the person as a preview they can
+ * edit, confirm or reject. It is data describing something that has *not*
+ * happened: nothing anywhere treats a proposal as authority to act, and the
+ * only transition out of PENDING comes from the person it was shown to.
+ */
+export const assistantProposalSchema = z.object({
+  kind: z.literal('CARD_DRAFT'),
+  title: z.string().min(1).max(200),
+  summary: z.string().min(1).max(2000),
+  /** Where it would go if confirmed. Shown in the preview so the person can see the destination before deciding. */
+  spaceId: z.string().uuid().nullable(),
+});
+export type AssistantProposal = z.infer<typeof assistantProposalSchema>;
+
+export const proposalDecisionBodySchema = z.object({
+  decision: z.enum(['CONFIRM', 'REJECT']),
+});
+export type ProposalDecisionBody = z.infer<typeof proposalDecisionBodySchema>;
+
+export const conversationPreferencesBodySchema = z
+  .object({
+    muted: z.boolean().optional(),
+    hidden: z.boolean().optional(),
+  })
+  .refine((v) => v.muted !== undefined || v.hidden !== undefined, {
+    message: 'At least one preference must be given.',
+  });
+export type ConversationPreferencesBody = z.infer<typeof conversationPreferencesBodySchema>;
 
 export const messageViewSchema = z.object({
   id: z.string().uuid(),
@@ -64,6 +100,9 @@ export const messageViewSchema = z.object({
   edited: z.boolean(),
   /** Echoed back so a sender can match this against the message it drew optimistically. Null for a message sent over REST. */
   clientMessageId: z.string().nullable(),
+  /** Set only on an assistant message that is suggesting something. Null on every message from a person. */
+  proposedAction: assistantProposalSchema.nullable(),
+  proposalState: proposalStateSchema,
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });

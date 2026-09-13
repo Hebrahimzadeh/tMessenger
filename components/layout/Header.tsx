@@ -11,14 +11,14 @@ import { INITIAL_GLOBAL_COMMENTS } from '@/lib/data/seed';
 export function Header() {
   const pathname = usePathname();
   const { openDrawer } = useUI();
-  const { chats } = useChats();
+  const { conversations } = useChats();
   const { platforms } = usePlatforms();
 
   const activeTab =
     pathname === '/' ? 'platforms' : pathname.startsWith('/chats') ? 'chats' : pathname.startsWith('/comments') ? 'comments' : null;
 
   const tabs = [
-    { id: 'chats', href: '/chats', label: 'گفتگوها', icon: MessageCircle, count: chats.reduce((a, c) => a + c.unread, 0) },
+    { id: 'chats', href: '/chats', label: 'گفتگوها', icon: MessageCircle, count: conversations.reduce((total, c) => total + c.unreadCount, 0) },
     { id: 'platforms', href: '/', label: 'بسترها', icon: Layers, count: platforms.reduce((a, c) => a + c.unreadCount, 0) },
     {
       id: 'comments',

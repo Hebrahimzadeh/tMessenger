@@ -84,7 +84,10 @@ export function ReservationActions({ cardId, cardAuthorId, currentUserId }: Rese
     const result = await runAction(`/cards/${cardId}/reservations`);
     if (result) {
       const { conversationId } = reserveCardResponseSchema.parse(result);
-      router.push(`/chats/${conversationId}`);
+      // Carries where this came from, so the chat's back button returns to
+      // the card rather than dropping the person in the chats tab -
+      // "back کاربر را به کارت مبدأ برگرداند" (Task 21).
+      router.push(`/chats/${conversationId}?from=${encodeURIComponent(`/cards/${cardId}`)}`);
     }
   }
 

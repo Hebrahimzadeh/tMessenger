@@ -51,6 +51,7 @@ export function createPrismaPublicProfileRepository(prisma: PrismaClient): Publi
       const profile = await prisma.userProfile.findFirst({
         where: { username: usernameLower },
         select: {
+          userId: true,
           username: true,
           displayName: true,
           bio: true,
@@ -61,6 +62,7 @@ export function createPrismaPublicProfileRepository(prisma: PrismaClient): Publi
       if (!profile) return null;
 
       return {
+        userId: profile.userId,
         username: profile.username,
         displayName: profile.displayName,
         bio: profile.bio,

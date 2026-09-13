@@ -53,7 +53,7 @@ describe('ReservationActions: the reservation "ladder" - REUSABLE_RESOURCE-style
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('reserving redirects immediately to /chats/:conversationId - no accept step', async () => {
+  it('reserving redirects immediately to the direct chat, carrying the card it came from - no accept step', async () => {
     global.fetch = mockFetchRouter({
       getState: [jsonResponse(200, { cardId: CARD_ID, state: 'ACTIVE', reservationId: null, reserverId: null, closeReason: null })],
       post: [jsonResponse(201, { reservationId: RESERVATION_ID, conversationId: CONVERSATION_ID })],
@@ -63,7 +63,11 @@ describe('ReservationActions: the reservation "ladder" - REUSABLE_RESOURCE-style
     await waitFor(() => expect(screen.getByRole('button', { name: 'رزرو' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'رزرو' }));
 
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith(`/chats/${CONVERSATION_ID}`));
+    // The `from` parameter is what lets the chat's back button return to this
+    // card instead of the chats tab (Task 21).
+    await waitFor(() =>
+      expect(pushMock).toHaveBeenCalledWith(`/chats/${CONVERSATION_ID}?from=${encodeURIComponent(`/cards/${CARD_ID}`)}`)
+    );
   });
 
   it('shows cancel for the reserver once RESERVED', async () => {

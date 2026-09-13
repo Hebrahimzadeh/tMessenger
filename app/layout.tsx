@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { ChatsProvider } from '@/hooks/useChats';
+import { getCurrentUser } from '@/lib/auth/session';
 import { PlatformsProvider } from '@/hooks/usePlatforms';
 import { UIProvider } from '@/hooks/useUI';
 import { AiCopilotProvider } from '@/hooks/useAiCopilot';
@@ -12,11 +13,15 @@ export const metadata: Metadata = {
   title: 'تعاون',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // The chat provider needs to know whose messages are "mine", and a socket
+  // is pointless for a visitor with no session, so it stays idle when null.
+  const user = await getCurrentUser();
+
   return (
     <html lang="fa" dir="rtl">
       <body>
-        <ChatsProvider>
+        <ChatsProvider meId={user?.userId ?? null}>
           <PlatformsProvider>
             <UIProvider>
               <AiCopilotProvider>

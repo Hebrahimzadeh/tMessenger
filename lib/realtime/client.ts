@@ -36,6 +36,12 @@ function socketOrigin(): string {
 export interface RealtimeConnection {
   join: (conversationId: string) => void;
   send: (conversationId: string, body: string) => string;
+  /**
+   * Sends under an id the caller already holds. A retry must reuse the id of
+   * the attempt it is retrying, or the server's deduplication has nothing to
+   * match and a message that did land would be written twice.
+   */
+  sendWithId: (conversationId: string, body: string, clientMessageId: string) => void;
   markRead: (conversationId: string, lastReadMessageId: string) => void;
   setTyping: (conversationId: string, typing: boolean) => void;
   disconnect: () => void;
@@ -161,6 +167,10 @@ export function connectRealtime(handlers: RealtimeHandlers): RealtimeConnection 
           : `cm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       socket.emit(REALTIME_EVENTS.messageSend, { conversationId, body, clientMessageId });
       return clientMessageId;
+    },
+
+    sendWithId(conversationId, body, clientMessageId) {
+      socket.emit(REALTIME_EVENTS.messageSend, { conversationId, body, clientMessageId });
     },
 
     markRead(conversationId, lastReadMessageId) {

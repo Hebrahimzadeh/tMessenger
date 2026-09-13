@@ -1,3 +1,4 @@
+import type { AssistantProposal, ProposalState } from '@taavon/contracts';
 import type { ConversationKind, MessageSenderKind, MessageStatus } from '@taavon/database';
 
 /**
@@ -59,6 +60,14 @@ export class ReceiptMessageMismatchError extends Error {
   }
 }
 
+/** The message carries no proposal, or one that was already decided. */
+export class NoPendingProposalError extends Error {
+  constructor() {
+    super('That message has no decision waiting.');
+    this.name = 'NoPendingProposalError';
+  }
+}
+
 /**
  * Raised when something tries to write an assistant message without the
  * in-process credential below.
@@ -99,6 +108,12 @@ export interface ConversationRecord {
   lastMessageAt: Date | null;
 }
 
+/** The caller's own view-preferences for one conversation. */
+export interface ConversationPreferences {
+  muted: boolean;
+  hidden: boolean;
+}
+
 export interface MessageRecord {
   id: string;
   conversationId: string;
@@ -109,6 +124,8 @@ export interface MessageRecord {
   revisionCount: number;
   /** Set only for a message that arrived over a socket - see the schema. */
   clientMessageId: string | null;
+  proposedAction: AssistantProposal | null;
+  proposalState: ProposalState;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -148,10 +165,21 @@ export interface MessagingRepository {
     senderKind: MessageSenderKind;
     body: string;
     clientMessageId?: string | null;
+    proposedAction?: AssistantProposal | null;
   }): Promise<MessageRecord>;
   addRevision(input: { messageId: string; editorId: string; body: string }): Promise<MessageRecord>;
   softDelete(input: { messageId: string; actorId: string; correlationId: string }): Promise<MessageRecord>;
   upsertReceipt(input: { conversationId: string; userId: string; lastReadMessageId: string }): Promise<ReceiptRecord>;
+  getPreferences(conversationId: string, userId: string): Promise<ConversationPreferences>;
+  setPreferences(
+    conversationId: string,
+    userId: string,
+    prefs: { muted?: boolean; hidden?: boolean }
+  ): Promise<ConversationPreferences>;
+  decideProposal(input: {
+    messageId: string;
+    decision: 'CONFIRM' | 'REJECT';
+  }): Promise<MessageRecord>;
 }
 
 export interface ConversationMemberView {
@@ -165,6 +193,8 @@ export interface ConversationView {
   createdAt: string;
   lastMessageAt: string | null;
   unreadCount: number;
+  muted: boolean;
+  hidden: boolean;
 }
 
 export interface MessageView {
@@ -178,6 +208,8 @@ export interface MessageView {
   edited: boolean;
   /** Echoed back so a sender can match this against the message it drew optimistically. */
   clientMessageId: string | null;
+  proposedAction: AssistantProposal | null;
+  proposalState: ProposalState;
   createdAt: string;
   updatedAt: string;
 }
@@ -190,7 +222,11 @@ export interface MessageView {
  * repository selects ids only. The privacy property is therefore a shape
  * guarantee rather than a filtering step that could be forgotten.
  */
-export function toConversationView(record: ConversationRecord, unreadCount: number): ConversationView {
+export function toConversationView(
+  record: ConversationRecord,
+  unreadCount: number,
+  prefs: ConversationPreferences = { muted: false, hidden: false }
+): ConversationView {
   return {
     id: record.id,
     kind: record.kind,
@@ -198,6 +234,8 @@ export function toConversationView(record: ConversationRecord, unreadCount: numb
     createdAt: record.createdAt.toISOString(),
     lastMessageAt: record.lastMessageAt?.toISOString() ?? null,
     unreadCount,
+    muted: prefs.muted,
+    hidden: prefs.hidden,
   };
 }
 
@@ -215,6 +253,8 @@ export function toMessageView(record: MessageRecord): MessageView {
     revisionCount: record.revisionCount,
     edited: record.revisionCount > 1,
     clientMessageId: record.clientMessageId,
+    proposedAction: record.proposedAction,
+    proposalState: record.proposalState,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
@@ -249,7 +289,11 @@ export async function createDirectConversation(
   // for the same pair returns the same conversation, so there is nothing to
   // guard against a double-tap on the client.
   const conversation = await repo.getOrCreateDirect(callerId, withUserId);
-  return toConversationView(conversation, await repo.countUnread(conversation.id, callerId));
+  return toConversationView(
+    conversation,
+    await repo.countUnread(conversation.id, callerId),
+    await repo.getPreferences(conversation.id, callerId)
+  );
 }
 
 /**
@@ -267,7 +311,32 @@ export async function getOrCreateAssistantConversation(
   userId: string
 ): Promise<ConversationView> {
   const conversation = await repo.getOrCreateAssistant(userId);
-  return toConversationView(conversation, await repo.countUnread(conversation.id, userId));
+  // Deliberately returned whether or not it is hidden: this route is the
+  // "reach it again" path, and hiding must not remove the ability to get
+  // back to the assistant.
+  return toConversationView(
+    conversation,
+    await repo.countUnread(conversation.id, userId),
+    await repo.getPreferences(conversation.id, userId)
+  );
+}
+
+/**
+ * One conversation, for a member. Needed because a hidden thread is
+ * deliberately absent from the list but still fully reachable - without this
+ * the client could open it and not know what it was looking at.
+ */
+export async function getConversation(
+  repo: MessagingRepository,
+  conversationId: string,
+  userId: string
+): Promise<ConversationView> {
+  const conversation = await requireMembership(repo, conversationId, userId);
+  return toConversationView(
+    conversation,
+    await repo.countUnread(conversationId, userId),
+    await repo.getPreferences(conversationId, userId)
+  );
 }
 
 export interface ConversationListResult {
@@ -286,7 +355,9 @@ export async function listConversations(
   const page = rows.slice(0, params.limit);
 
   const items = await Promise.all(
-    page.map(async (row) => toConversationView(row, await repo.countUnread(row.id, userId)))
+    page.map(async (row) =>
+      toConversationView(row, await repo.countUnread(row.id, userId), await repo.getPreferences(row.id, userId))
+    )
   );
 
   const last = page[page.length - 1];
@@ -358,7 +429,7 @@ export async function sendSystemMessage(
   repo: MessagingRepository,
   credential: ServiceCredential,
   conversationId: string,
-  input: { body: string }
+  input: { body: string; proposedAction?: AssistantProposal | null }
 ): Promise<MessageView> {
   if (credential !== SERVICE_CREDENTIAL) throw new SystemSenderNotAuthorizedError();
 
@@ -373,6 +444,10 @@ export async function sendSystemMessage(
     senderId: null,
     senderKind: 'SYSTEM_ASSISTANT',
     body: input.body,
+    // A proposal arrives as PENDING and stays there until a person decides.
+    // Attaching one is not an action, and nothing downstream treats it as
+    // permission to take one.
+    proposedAction: input.proposedAction ?? null,
   });
   return toMessageView(record);
 }
@@ -428,6 +503,51 @@ export async function markRead(
   if (message.conversationId !== conversationId) throw new ReceiptMessageMismatchError();
 
   return repo.upsertReceipt({ conversationId, userId, lastReadMessageId });
+}
+
+/**
+ * Muting or hiding is one person's choice about their own view. It is stored
+ * on their own membership row, so it can never change what the other side
+ * sees, and hiding removes the thread from their list without touching the
+ * conversation, its messages, or any route back to it.
+ */
+export async function setConversationPreferences(
+  repo: MessagingRepository,
+  conversationId: string,
+  userId: string,
+  prefs: { muted?: boolean; hidden?: boolean }
+): Promise<ConversationView> {
+  const conversation = await requireMembership(repo, conversationId, userId);
+  const updated = await repo.setPreferences(conversationId, userId, prefs);
+  return toConversationView(conversation, await repo.countUnread(conversationId, userId), updated);
+}
+
+/**
+ * The person's decision on something the assistant suggested, and the only
+ * way a proposal ever leaves PENDING.
+ *
+ * Confirming records the decision and nothing else. There is deliberately no
+ * execution here: the assistant has no tools until the orchestrator arrives
+ * in M5, so there is no domain command to run and nothing that could run one
+ * without passing through this function first. "بدون تأیید هیچ domain
+ * command ارسال نشود" holds because the only path from a suggestion to an
+ * action starts here, and it starts with a person pressing something.
+ */
+export async function decideProposal(
+  repo: MessagingRepository,
+  messageId: string,
+  userId: string,
+  decision: 'CONFIRM' | 'REJECT'
+): Promise<MessageView> {
+  const message = await repo.findMessage(messageId);
+  if (!message) throw new MessageNotFoundError();
+  // Membership first, so a non-member cannot learn a proposal exists.
+  await requireMembership(repo, message.conversationId, userId);
+  if (message.senderKind !== 'SYSTEM_ASSISTANT' || message.proposalState !== 'PENDING') {
+    throw new NoPendingProposalError();
+  }
+
+  return toMessageView(await repo.decideProposal({ messageId, decision }));
 }
 
 function encodeCursor(value: Record<string, string>): string {

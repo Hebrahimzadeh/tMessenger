@@ -162,3 +162,27 @@ export const Truck = ({ size = 24, strokeWidth = 2, ...props }: IconProps) => (
 export const Wrench = ({ size = 24, strokeWidth = 2, ...props }: IconProps) => (
   <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
 );
+// --- Task 21: private chat ---------------------------------------------
+
+/** The assistant's own mark. Deliberately not a face: it is not a person. */
+export const Bot = ({ size = 24, strokeWidth = 2, ...props }: IconProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...props}><rect x="3" y="8" width="18" height="12" rx="3"></rect><path d="M12 8V4"></path><circle cx="12" cy="3" r="1"></circle><circle cx="8.5" cy="14" r="1.2"></circle><circle cx="15.5" cy="14" r="1.2"></circle></svg>
+);
+
+
+export const BellOff = ({ size = 24, strokeWidth = 2, ...props }: IconProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M8.7 3A6 6 0 0 1 18 8c0 2.5.4 4.4 1 5.8"></path><path d="M17 17H3s3-2 3-9a6 6 0 0 1 .3-1.9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg>
+);
+
+export const EyeOff = ({ size = 24, strokeWidth = 2, ...props }: IconProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M9.9 4.2A9.1 9.1 0 0 1 12 4c5 0 9 4.5 9 8a11 11 0 0 1-2 3.3"></path><path d="M6.6 6.6C4 8.2 3 10.8 3 12c0 3.5 4 8 9 8a9.7 9.7 0 0 0 4.5-1.1"></path><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg>
+);
+
+export const AlertCircle = ({ size = 24, strokeWidth = 2, ...props }: IconProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+);
+
+export const Clock = ({ size = 24, strokeWidth = 2, ...props }: IconProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+);
+

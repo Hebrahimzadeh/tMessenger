@@ -341,3 +341,124 @@ describe.skipIf(!databaseAvailable)('private message text reaches no other table
     await prisma.user.delete({ where: { id: owner.id } });
   });
 });
+
+/**
+ * The assistant suggesting something must never be the same event as the
+ * thing happening. These run against real Postgres so "nothing was created"
+ * is a statement about rows, not about a stub not being called.
+ */
+describe.skipIf(!databaseAvailable)('an assistant suggestion publishes nothing on its own', () => {
+  const prisma = getPrisma();
+  const repo = createPrismaMessagingRepository(prisma);
+
+  async function withAssistantProposal() {
+    const owner = await prisma.user.create({ data: {} });
+    const convo = await repo.getOrCreateAssistant(owner.id);
+    const message = await sendSystemMessage(repo, internalServiceCredential(), convo.id, {
+      body: 'پیشنهاد می‌کنم این کارت را بسازید.',
+      proposedAction: { kind: 'CARD_DRAFT', title: 'کارت پیشنهادی', summary: 'خلاصه', spaceId: null },
+    });
+    return { owner, convo, message };
+  }
+
+  async function cleanUp(ownerId: string, conversationId: string) {
+    await prisma.messageRevision.deleteMany({ where: { message: { conversationId } } });
+    await prisma.message.deleteMany({ where: { conversationId } });
+    await prisma.conversationMember.deleteMany({ where: { conversationId } });
+    await prisma.conversation.delete({ where: { id: conversationId } });
+    await prisma.user.delete({ where: { id: ownerId } });
+  }
+
+  it('stores the suggestion as pending and creates no card, space or outbox event', async () => {
+    const cardsBefore = await prisma.card.count();
+    const spacesBefore = await prisma.space.count();
+    const { owner, convo, message } = await withAssistantProposal();
+
+    expect(message.proposalState).toBe('PENDING');
+    expect(message.proposedAction).toMatchObject({ kind: 'CARD_DRAFT', title: 'کارت پیشنهادی' });
+
+    // Nothing at all happened beyond a message being stored.
+    await expect(prisma.card.count()).resolves.toBe(cardsBefore);
+    await expect(prisma.space.count()).resolves.toBe(spacesBefore);
+    await expect(prisma.outboxEvent.count({ where: { aggregateId: convo.id } })).resolves.toBe(0);
+    await expect(prisma.awarenessEvent.count({ where: { subjectId: convo.id } })).resolves.toBe(0);
+
+    await cleanUp(owner.id, convo.id);
+  });
+
+  it('still creates nothing when the person confirms - there is no tool to run until M5, and the decision alone is not one', async () => {
+    const cardsBefore = await prisma.card.count();
+    const { owner, convo, message } = await withAssistantProposal();
+
+    const decided = await repo.decideProposal({ messageId: message.id, decision: 'CONFIRM' });
+    expect(decided.proposalState).toBe('CONFIRMED');
+    await expect(prisma.card.count()).resolves.toBe(cardsBefore);
+
+    await cleanUp(owner.id, convo.id);
+  });
+
+  it('records a rejection without creating anything either', async () => {
+    const cardsBefore = await prisma.card.count();
+    const { owner, convo, message } = await withAssistantProposal();
+
+    const decided = await repo.decideProposal({ messageId: message.id, decision: 'REJECT' });
+    expect(decided.proposalState).toBe('REJECTED');
+    await expect(prisma.card.count()).resolves.toBe(cardsBefore);
+
+    await cleanUp(owner.id, convo.id);
+  });
+
+  it('reads back an unrecognisable stored proposal as no proposal, rather than passing it on', async () => {
+    const owner = await prisma.user.create({ data: {} });
+    const convo = await repo.getOrCreateAssistant(owner.id);
+    const message = await repo.insertMessage({
+      conversationId: convo.id,
+      senderId: null,
+      senderKind: 'SYSTEM_ASSISTANT',
+      body: 'x',
+    });
+    // A row written by some older or wrong shape.
+    await prisma.message.update({
+      where: { id: message.id },
+      data: { proposedAction: { kind: 'SOMETHING_ELSE', danger: true }, proposalState: 'PENDING' },
+    });
+
+    const read = await repo.findMessage(message.id);
+    expect(read?.proposedAction).toBeNull();
+
+    await cleanUp(owner.id, convo.id);
+  });
+});
+
+describe.skipIf(!databaseAvailable)('per-person conversation preferences', () => {
+  const prisma = getPrisma();
+  const repo = createPrismaMessagingRepository(prisma);
+
+  it('are stored per member, so one side muting or hiding never moves the other', async () => {
+    const alice = await prisma.user.create({ data: {} });
+    const bob = await prisma.user.create({ data: {} });
+    const convo = await repo.getOrCreateDirect(alice.id, bob.id);
+
+    await expect(repo.getPreferences(convo.id, alice.id)).resolves.toEqual({ muted: false, hidden: false });
+
+    await repo.setPreferences(convo.id, alice.id, { muted: true, hidden: true });
+    await expect(repo.getPreferences(convo.id, alice.id)).resolves.toEqual({ muted: true, hidden: true });
+    await expect(repo.getPreferences(convo.id, bob.id)).resolves.toEqual({ muted: false, hidden: false });
+
+    // Alice's list loses it; Bob's does not.
+    const aliceList = await repo.listConversationsForUser(alice.id, { limit: 50, before: null });
+    const bobList = await repo.listConversationsForUser(bob.id, { limit: 50, before: null });
+    expect(aliceList.map((c) => c.id)).not.toContain(convo.id);
+    expect(bobList.map((c) => c.id)).toContain(convo.id);
+
+    // And it comes straight back.
+    await repo.setPreferences(convo.id, alice.id, { hidden: false });
+    const restored = await repo.listConversationsForUser(alice.id, { limit: 50, before: null });
+    expect(restored.map((c) => c.id)).toContain(convo.id);
+    await expect(repo.getPreferences(convo.id, alice.id)).resolves.toEqual({ muted: true, hidden: false });
+
+    await prisma.conversationMember.deleteMany({ where: { conversationId: convo.id } });
+    await prisma.conversation.delete({ where: { id: convo.id } });
+    await prisma.user.deleteMany({ where: { id: { in: [alice.id, bob.id] } } });
+  });
+});
