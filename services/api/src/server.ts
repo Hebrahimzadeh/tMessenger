@@ -89,6 +89,9 @@ async function main() {
     messaging: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
     },
+    notifications: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
     awareness: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
     },

@@ -13,6 +13,7 @@
   "dependencies": {
     "@taavon/awareness": "*",
     "@taavon/database": "*",
+    "@taavon/notifications": "*",
     "@taavon/space-health": "*",
     "bullmq": "^5.34.0",
     "dotenv": "^17.4.2",

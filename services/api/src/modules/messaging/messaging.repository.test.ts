@@ -34,6 +34,9 @@ describe.skipIf(!databaseAvailable)('MessagingRepository: real Postgres', () => 
       await prisma.message.findMany({ where: { conversationId: { in: ids } }, select: { id: true } })
     ).map((m) => m.id);
 
+    // Task 22: a private message now also creates a notification for the
+    // other member, and notifications restrict user deletion.
+    await prisma.notification.deleteMany({ where: { subjectId: { in: messageIds } } });
     await prisma.messageRevision.deleteMany({ where: { messageId: { in: messageIds } } });
     // Audit rows have no foreign key by design, so they are cleaned by the
     // ids this run created rather than by a cascade.
@@ -65,6 +68,7 @@ describe.skipIf(!databaseAvailable)('MessagingRepository: real Postgres', () => 
       select: { id: true },
     });
     await purgeConversations([...new Set([...createdConversationIds, ...theirs.map((c) => c.id)])]);
+    await prisma.notification.deleteMany({ where: { recipientId: { in: everyone } } });
     await prisma.user.deleteMany({ where: { id: { in: everyone } } });
   });
 
@@ -309,6 +313,7 @@ describe.skipIf(!databaseAvailable)('private message text reaches no other table
     await expect(prisma.awarenessEvent.count({ where: { subjectId: convo.id } })).resolves.toBe(0);
     await expect(prisma.outboxEvent.count({ where: { aggregateId: convo.id } })).resolves.toBe(0);
 
+    await prisma.notification.deleteMany({ where: { recipientId: { in: [alice.id, bob.id] } } });
     await prisma.messageRevision.deleteMany({ where: { message: { conversationId: convo.id } } });
     await prisma.messageReceipt.deleteMany({ where: { conversationId: convo.id } });
     await prisma.message.deleteMany({ where: { conversationId: convo.id } });
@@ -334,6 +339,7 @@ describe.skipIf(!databaseAvailable)('private message text reaches no other table
     });
     expect(stored).toEqual({ senderId: null, senderKind: 'SYSTEM_ASSISTANT' });
 
+    await prisma.notification.deleteMany({ where: { recipientId: owner.id } });
     await prisma.messageRevision.deleteMany({ where: { message: { conversationId: convo.id } } });
     await prisma.message.deleteMany({ where: { conversationId: convo.id } });
     await prisma.conversationMember.deleteMany({ where: { conversationId: convo.id } });
@@ -362,6 +368,7 @@ describe.skipIf(!databaseAvailable)('an assistant suggestion publishes nothing o
   }
 
   async function cleanUp(ownerId: string, conversationId: string) {
+    await prisma.notification.deleteMany({ where: { recipientId: ownerId } });
     await prisma.messageRevision.deleteMany({ where: { message: { conversationId } } });
     await prisma.message.deleteMany({ where: { conversationId } });
     await prisma.conversationMember.deleteMany({ where: { conversationId } });

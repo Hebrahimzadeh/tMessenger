@@ -4,6 +4,7 @@ import IORedis from 'ioredis';
 import { parseWorkerEnv } from './config/env';
 import { processSpaceHealthJob } from './jobs/space-health';
 import { processAwarenessAggregationJob } from './jobs/awareness-aggregation';
+import { processNotificationDispatchJob } from './jobs/notification-dispatch';
 
 const env = parseWorkerEnv();
 
@@ -103,3 +104,50 @@ awarenessWorker.on('failed', (job, err) => {
 await scheduleAwarenessDailyJob();
 // eslint-disable-next-line no-console -- see the completed handler's own comment above.
 console.log('[worker] awareness-aggregation worker started; daily job scheduled for 03:30');
+
+// --- notification dispatch: a third queue, on a very different cadence ------
+// The other two are daily aggregations; this one drains the outbox into
+// notifications, and a notification that arrives tomorrow is not a
+// notification. Every 10 seconds is the compromise between timeliness and a
+// pointless query load on an idle system - the outbox is polled, which is
+// inherent to the pattern, so the only lever is how often.
+//
+// The job itself is at-least-once and idempotent (see @taavon/notifications),
+// so a retried or overlapping run cannot produce a duplicate notification.
+const NOTIFICATION_QUEUE_NAME = 'notification-dispatch';
+const NOTIFICATION_JOB_NAME = 'drain-notification-outbox';
+
+const notificationQueue = new Queue(NOTIFICATION_QUEUE_NAME, { connection });
+
+async function scheduleNotificationJob(): Promise<void> {
+  await notificationQueue.upsertJobScheduler(
+    NOTIFICATION_JOB_NAME,
+    { every: 10_000 },
+    { name: NOTIFICATION_JOB_NAME }
+  );
+}
+
+const notificationWorker = new Worker(
+  NOTIFICATION_QUEUE_NAME,
+  async () => processNotificationDispatchJob(),
+  { connection }
+);
+
+notificationWorker.on('completed', (job, result: { created: number; deferred: string[] }) => {
+  // Silent on the common case of nothing to do - this runs every ten seconds,
+  // and logging each empty pass would bury everything else in the log.
+  if (result.created === 0 && result.deferred.length === 0) return;
+  // eslint-disable-next-line no-console -- see the space-health completed handler's own comment above.
+  console.log(
+    `[notification-dispatch] job ${job.id} completed - ${result.created} created, ${result.deferred.length} deferred`
+  );
+});
+
+notificationWorker.on('failed', (job, err) => {
+  // eslint-disable-next-line no-console -- see the space-health failed handler's own comment above.
+  console.error(`[notification-dispatch] job ${job?.id ?? '(unknown)'} failed`, err);
+});
+
+await scheduleNotificationJob();
+// eslint-disable-next-line no-console -- see the completed handler's own comment above.
+console.log('[worker] notification-dispatch worker started; draining the outbox every 10s');

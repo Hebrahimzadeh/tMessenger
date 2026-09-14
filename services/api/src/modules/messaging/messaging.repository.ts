@@ -257,6 +257,32 @@ export function createPrismaMessagingRepository(prisma: PrismaClient): Messaging
           await tx.messageRevision.create({
             data: { messageId: message.id, revisionNumber: 1, body, editorId: senderId },
           });
+
+          // Task 22's notification for a private message is written here, in
+          // the same transaction as the message, rather than through the
+          // outbox. Routing it through the outbox would put a timestamped
+          // record of private correspondence in a general-purpose log that
+          // other consumers read; Task 19's canary asserts that log stays
+          // empty for a conversation. The row below carries no text - only
+          // who should look and where - and the preview is read from the
+          // message itself at request time.
+          const others = await tx.conversationMember.findMany({
+            where: { conversationId, NOT: senderId ? { userId: senderId } : undefined },
+            select: { userId: true },
+          });
+          for (const { userId } of others) {
+            await tx.notification.create({
+              data: {
+                recipientId: userId,
+                type: 'NEW_PRIVATE_MESSAGE',
+                dedupKey: `NEW_PRIVATE_MESSAGE:${message.id}:${userId}`,
+                subjectType: 'Message',
+                subjectId: message.id,
+                deepLink: `/chats/${conversationId}`,
+                deliveries: { create: { channel: 'IN_APP', deliveredAt: new Date() } },
+              },
+            });
+          }
           // No awareness event, no outbox event, no audit row carrying text.
           // Task 16 already logs PRIVATE_CHAT_STARTED when a reservation opens
           // the conversation, which is the only awareness signal private

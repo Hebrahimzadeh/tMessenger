@@ -13,6 +13,7 @@ export * from './space';
 export * from './card';
 export * from './public-comment';
 export * from './messaging';
+export * from './notification';
 export * from './reservation';
 export * from './space-health';
 export * from './space-search';

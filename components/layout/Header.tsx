@@ -6,6 +6,7 @@ import { Menu, Search, MessageCircle, Layers, MessageSquare } from '@/components
 import { useUI } from '@/hooks/useUI';
 import { useChats } from '@/hooks/useChats';
 import { usePlatforms } from '@/hooks/usePlatforms';
+import { NotificationBell } from '@/components/notifications/NotificationBell';
 import { INITIAL_GLOBAL_COMMENTS } from '@/lib/data/seed';
 
 export function Header() {
@@ -38,9 +39,12 @@ export function Header() {
           </button>
           <h1 className="text-[17px] font-medium tracking-wide">تعاون</h1>
         </div>
-        <button className="p-1 hover:bg-white/10 rounded-full transition">
-          <Search size={20} />
-        </button>
+        <div className="flex items-center gap-1">
+          <NotificationBell />
+          <button className="p-1 hover:bg-white/10 rounded-full transition">
+            <Search size={20} />
+          </button>
+        </div>
       </div>
       <div className="flex text-[13px] font-medium px-2 overflow-x-auto hide-scrollbar [&::-webkit-scrollbar]:hidden">
         {tabs.map((tab) => (

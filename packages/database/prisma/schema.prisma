@@ -92,6 +92,8 @@ model User {
   conversationMemberships         ConversationMember[]     @relation("ConversationMemberUser")
   sentMessages                    Message[]                @relation("MessageSender")
   messageReceipts                 MessageReceipt[]         @relation("MessageReceiptUser")
+  notifications                   Notification[]           @relation("NotificationRecipient")
+  notificationPreference          NotificationPreference?  @relation("NotificationPreferenceUser")
 
   @@index([status])
   @@map("users")
@@ -1121,4 +1123,92 @@ model AuditEvent {
   @@index([actorId, createdAt])
   @@index([targetType, targetId])
   @@map("audit_events")
+}
+
+// Task 22: in-app notifications. Additive only.
+
+enum NotificationType {
+  NEW_PUBLIC_REPLY
+  RESERVATION_CHANGED
+  NEW_PRIVATE_MESSAGE
+  MODERATION_UPDATE
+  SPACE_GUIDANCE
+}
+
+/// Only IN_APP exists, and that is a decision rather than a placeholder:
+/// "delivery خارجی/SMS اطلاع‌رسانی در MVP اضافه نکن". An SMS or push channel
+/// would carry what happened out of the platform and into a carrier's logs,
+/// which is exactly what this milestone's privacy premise rules out. The
+/// enum exists so adding one later is a reviewable migration rather than a
+/// quiet change of meaning.
+enum NotificationChannel {
+  IN_APP
+}
+
+/// One thing worth telling one person about.
+///
+/// It holds no content. `subjectType`/`subjectId` say what it is about, and
+/// a preview - when the type and the recipient's own preference both allow
+/// one - is read from the source at request time and trimmed there. That is
+/// what keeps Task 19's canary true: private message text stays in `messages`
+/// and `message_revisions` and is never copied into a notification row.
+model Notification {
+  id          String           @id @default(uuid()) @db.Uuid
+  recipientId String           @db.Uuid
+  type        NotificationType
+  /// One per notification-worthy event per recipient. The unique constraint
+  /// is the whole of "at-least-once and idempotent": a consumer replaying
+  /// the same outbox row collides here instead of creating a second row.
+  dedupKey    String           @unique
+  subjectType String
+  subjectId   String           @db.Uuid
+  /// Where pressing it goes. A path, never content.
+  deepLink    String
+  readAt      DateTime?        @db.Timestamptz(6)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(6)
+
+  recipient  User                   @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Restrict)
+  deliveries NotificationDelivery[]
+
+  /// Serves the recipient's own keyset page directly, newest first.
+  @@index([recipientId, createdAt, id])
+  /// Serves the unread badge without scanning the rest.
+  @@index([recipientId, readAt])
+  @@map("notifications")
+}
+
+/// One row per channel a notification was actually delivered on. Separate
+/// from Notification so a future channel can fail and retry without
+/// re-creating the notification itself.
+model NotificationDelivery {
+  id             String              @id @default(uuid()) @db.Uuid
+  notificationId String              @db.Uuid
+  channel        NotificationChannel @default(IN_APP)
+  deliveredAt    DateTime?           @db.Timestamptz(6)
+  attempts       Int                 @default(0)
+  createdAt      DateTime            @default(now()) @db.Timestamptz(6)
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, channel])
+  @@map("notification_deliveries")
+}
+
+/// Per-person notification settings. A separate table rather than a column
+/// on UserProfile because someone can be logged in without ever having set
+/// up a profile, and their preferences must still exist and still apply.
+/// Absent means the defaults below.
+model NotificationPreference {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @unique @db.Uuid
+  /// "preview پیام خصوصی ... قابل خاموش‌کردن". When false, a private-message
+  /// notification is still delivered - you still learn someone wrote to you -
+  /// but it carries no excerpt, for the shoulder-surfing case this exists for.
+  privateMessagePreview Boolean  @default(true)
+  createdAt             DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @db.Timestamptz(6)
+
+  user User @relation("NotificationPreferenceUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("notification_preferences")
 }
