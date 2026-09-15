@@ -126,4 +126,8 @@ This is the M4 stop condition. It needs **two devices, or two browsers**, logged
 
 Roll back to `5400be1` to drop only the Dockerfile fix, to `e403403` for the end of Task 21, or to any task commit in the table above. Rebuild and `docker compose up -d`. The four M4 migrations are additive and forward-only: rolling back application code does not and must not roll them back.
 
-Owner decision: WAITING_FOR_OWNER
+Owner decision: MILESTONE-4 APPROVED
+
+Approved by the owner on 2026-09-15. Milestone 5 ("هوش مصنوعی هدایت‌گر و قابل
+خاموش‌شدن") may begin: Task 23's gate — "Review 22 و تأیید M4" — is now
+satisfied.
