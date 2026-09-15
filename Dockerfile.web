@@ -12,6 +12,7 @@ COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/database/package.json ./packages/database/package.json
 COPY packages/awareness/package.json ./packages/awareness/package.json
 COPY packages/space-health/package.json ./packages/space-health/package.json
+COPY packages/notifications/package.json ./packages/notifications/package.json
 COPY services/api/package.json ./services/api/package.json
 COPY services/worker/package.json ./services/worker/package.json
 RUN npm ci
