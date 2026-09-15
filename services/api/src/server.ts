@@ -11,6 +11,9 @@ import { createPrismaSessionLiveness } from './modules/messaging/realtime-auth';
 import { REALTIME_SEND_RATE_LIMIT, REALTIME_SEND_RATE_WINDOW_SECONDS } from './modules/messaging/realtime.gateway';
 import { createSmsProvider } from './modules/auth/sms-provider';
 import { createRedisRateLimiter, type RateLimiter } from './modules/auth/rate-limiter';
+import { AiOrchestrator } from './modules/ai/orchestrator';
+import { createPrismaOrchestratorRepository } from './modules/ai/ai.repository';
+import { GeminiProvider } from './modules/ai/providers/gemini-provider';
 import { REACTION_RATE_LIMIT, REACTION_RATE_WINDOW_SECONDS } from './modules/cards/public-comment.route';
 
 async function main() {
@@ -91,6 +94,17 @@ async function main() {
     },
     notifications: {
       sessionHmacKey: env.SESSION_HMAC_KEY,
+    },
+    ai: {
+      sessionHmacKey: env.SESSION_HMAC_KEY,
+      orchestrator: new AiOrchestrator({
+        // No key means no provider, and no provider means every capability
+        // answers from its fallback. Running without AI is a supported
+        // configuration, not a degraded one.
+        provider: env.GEMINI_API_KEY ? new GeminiProvider(env.GEMINI_API_KEY) : null,
+        repository: createPrismaOrchestratorRepository(getPrisma()),
+        dailyBudgetMicros: env.AI_DAILY_BUDGET_MICROS ?? null,
+      }),
     },
     awareness: {
       sessionHmacKey: env.SESSION_HMAC_KEY,

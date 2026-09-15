@@ -1,4 +1,5 @@
 export * from './admin';
+export * from './ai';
 export * from './awareness';
 export * from './auth';
 export * from './errors';

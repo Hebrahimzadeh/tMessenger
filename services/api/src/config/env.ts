@@ -41,6 +41,11 @@ const baseSchema = z.object({
   // provider" - see sms-provider.ts's SmsProviderNotConfiguredError.
   SMS_PROVIDER_WEBHOOK_URL: z.string().url().optional(),
   SMS_PROVIDER_API_KEY: z.string().min(1).optional(),
+  // Task 23. All optional: with no key the orchestrator runs with no
+  // provider and every capability answers from its rule-based fallback,
+  // which is a supported way to run rather than a broken one.
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  AI_DAILY_BUDGET_MICROS: z.coerce.number().int().nonnegative().optional(),
 });
 
 export type Env = z.infer<typeof baseSchema>;

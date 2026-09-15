@@ -94,6 +94,7 @@ model User {
   messageReceipts                 MessageReceipt[]         @relation("MessageReceiptUser")
   notifications                   Notification[]           @relation("NotificationRecipient")
   notificationPreference          NotificationPreference?  @relation("NotificationPreferenceUser")
+  aiRequests                      AiRequest[]              @relation("AiRequester")
 
   @@index([status])
   @@map("users")
@@ -1211,4 +1212,124 @@ model NotificationPreference {
   user User @relation("NotificationPreferenceUser", fields: [userId], references: [id], onDelete: Restrict)
 
   @@map("notification_preferences")
+}
+
+// Task 23: AI orchestration. Additive only.
+
+/// Where an input to the model came from.
+///
+/// There is deliberately no `PRIVATE_DIRECT_MESSAGE`. This is the single most
+/// important line in the AI schema: a source that does not exist cannot be
+/// selected by a caller, cannot be stored, and cannot be added later without
+/// a migration somebody has to review. `ASSISTANT_CONVERSATION` is what a
+/// person says *to the assistant* in their own helper thread, which is a
+/// different thing from what two people say to each other - see
+/// policy-guard.ts, which verifies that distinction against the database
+/// rather than trusting the caller's label.
+enum AiInputSource {
+  PUBLIC_USER_INPUT
+  PUBLIC_SPACE_DATA
+  ASSISTANT_CONVERSATION
+  MODERATION_GRANTED_CONTEXT
+}
+
+enum AiCapability {
+  SPACE_GUIDANCE
+  CARD_DRAFT
+  ASSISTANT_REPLY
+  MODERATION_ASSIST
+}
+
+enum AiOutcome {
+  /// The model answered and its output passed validation.
+  SUGGESTION
+  /// The model was unusable, so a rule-based answer was produced instead.
+  FALLBACK
+  /// Neither was possible. The caller carries on without AI.
+  UNAVAILABLE
+}
+
+/// One attempt to use the model.
+///
+/// It records the shape of the input, never the input: a hash and a length,
+/// so usage can be accounted for and abuse spotted without a second copy of
+/// what someone wrote existing anywhere.
+model AiRequest {
+  id              String        @id @default(uuid()) @db.Uuid
+  requesterId     String?       @db.Uuid
+  capability      AiCapability
+  source          AiInputSource
+  promptVersionId String?       @db.Uuid
+  /// SHA-256 of the input. Lets a replay be recognised without keeping the text.
+  inputHash       String
+  inputChars      Int
+  createdAt       DateTime      @default(now()) @db.Timestamptz(6)
+
+  requester     User?          @relation("AiRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  promptVersion PromptVersion? @relation(fields: [promptVersionId], references: [id], onDelete: Restrict)
+  result        AiResult?
+  usage         ProviderUsage?
+
+  @@index([requesterId, createdAt])
+  @@map("ai_requests")
+}
+
+/// What came back, after validation.
+///
+/// `payload` is the structured output a schema accepted, and nothing else.
+/// Reasoning traces are deliberately never stored - "chain-of-thought ذخیره
+/// نمی‌شود" - both because they are the least reviewable thing a model emits
+/// and because they routinely restate the input, which is the one thing this
+/// design works hardest to avoid keeping.
+model AiResult {
+  id        String    @id @default(uuid()) @db.Uuid
+  requestId String    @unique @db.Uuid
+  outcome   AiOutcome
+  payload   Json?
+  /// Machine-readable reason when the outcome is not SUGGESTION.
+  errorCode String?
+  latencyMs Int
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+
+  request AiRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@map("ai_results")
+}
+
+/// A versioned prompt template. Immutable once created: changing how the
+/// model is asked is a new version, so a stored result can always be traced
+/// to the exact wording that produced it.
+model PromptVersion {
+  id          String       @id @default(uuid()) @db.Uuid
+  capability  AiCapability
+  version     Int
+  template    String
+  contentHash String
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+
+  requests AiRequest[]
+
+  @@unique([capability, version])
+  @@map("prompt_versions")
+}
+
+/// What one request actually cost. Separate from AiRequest because a request
+/// that never reached a provider - refused by the guard, over quota, or
+/// answered from the fallback - has no usage at all, and a nullable pile of
+/// columns would blur that distinction.
+model ProviderUsage {
+  id           String   @id @default(uuid()) @db.Uuid
+  requestId    String   @unique @db.Uuid
+  provider     String
+  model        String
+  inputTokens  Int
+  outputTokens Int
+  /// Micros rather than a float: money must not be summed in binary floating point.
+  costMicros   Int
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  request AiRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@map("provider_usage")
 }

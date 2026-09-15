@@ -15,6 +15,9 @@ import { reservationRoutes, type ReservationRouteOptions } from './modules/cards
 import { healthRoutes, type HealthRouteOptions } from './modules/health/health.route';
 import { messagingRoutes, type MessagingRouteOptions } from './modules/messaging/messaging.route';
 import { notificationRoutes, type NotificationRouteOptions } from './modules/notifications/notification.route';
+import { aiRoutes, type AiRouteOptions } from './modules/ai/ai.route';
+import { AiOrchestrator } from './modules/ai/orchestrator';
+import { createPrismaOrchestratorRepository } from './modules/ai/ai.repository';
 import { identityClaimRoutes, type IdentityClaimRouteOptions } from './modules/identity-claim/identity-claim.route';
 import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-document.route';
 import { profileRoutes, type ProfileRouteOptions } from './modules/profile/profile.route';
@@ -48,6 +51,7 @@ export interface BuildAppOptions extends FastifyServerOptions {
   reservations?: Partial<ReservationRouteOptions>;
   messaging?: Partial<MessagingRouteOptions>;
   notifications?: Partial<NotificationRouteOptions>;
+  ai?: Partial<AiRouteOptions>;
   awareness?: Partial<AwarenessRouteOptions>;
   storage?: Partial<StorageRouteOptions>;
   /** Feeds CORS's allow-list and legal's URL resolution; server.ts always passes the real APP_ORIGIN. */
@@ -83,6 +87,7 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     reservations,
     messaging,
     notifications,
+    ai,
     awareness,
     storage,
     appOrigin,
@@ -204,6 +209,20 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     prefix: '/v1',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
     ...notifications,
+  });
+  app.register(aiRoutes, {
+    prefix: '/v1',
+    sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    // No provider by default: a test instance must never be able to dial a
+    // real vendor, and server.ts supplies the real one when a key exists.
+    orchestrator:
+      ai?.orchestrator ??
+      new AiOrchestrator({
+        provider: null,
+        repository: createPrismaOrchestratorRepository(app.db),
+        dailyBudgetMicros: null,
+      }),
+    ...ai,
   });
   app.register(awarenessRoutes, {
     prefix: '/v1',
