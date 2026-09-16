@@ -1333,3 +1333,64 @@ model ProviderUsage {
   @@index([createdAt])
   @@map("provider_usage")
 }
+
+// Task 24: the policy baseline behind space-creation guidance. Additive only.
+
+/// How seriously a matched rule is taken.
+///
+/// Only SEVERE can produce a BLOCK, and only ever with a rule actually
+/// matched - "BLOCK فقط با matched rule مجاز". REVIEW means a person looks;
+/// NORMAL means the rule is informational and changes nothing on its own.
+enum PolicySeverity {
+  NORMAL
+  REVIEW
+  SEVERE
+}
+
+/// A named policy rule, stable across versions.
+///
+/// `key` is what a decision cites, so a BLOCK recorded today is still
+/// traceable after the wording changes. The definition never carries the
+/// rule's content; that lives in its versions, which are immutable.
+model PolicyDefinition {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  versions PolicyVersion[]
+
+  @@map("policy_definitions")
+}
+
+/// One immutable statement of a rule.
+///
+/// Immutable on purpose - "baseline policy را immutable و فقط از
+/// migration/seed بازبینی‌شده بساز". Nothing in the application updates this
+/// table; a changed rule is a new version from a reviewed migration, so a
+/// decision can always be traced to the exact wording that produced it.
+/// Task 30 adds the moderator-facing management path, with its own review.
+///
+/// `source` and `example` are required rather than optional, and that is the
+/// point: a rule nobody can trace to a law or a published policy, and that
+/// carries no concrete example of what it does and does not cover, is not a
+/// rule anybody can apply consistently.
+model PolicyVersion {
+  id           String         @id @default(uuid()) @db.Uuid
+  definitionId String         @db.Uuid
+  version      Int
+  title        String
+  /// The law or published policy this comes from. Never "because we said so".
+  source       String
+  /// A concrete case it covers, so a reader can see its edges.
+  example      String
+  severity     PolicySeverity
+  /// The terms that match it. Deliberately explicit rather than inferred:
+  /// a BLOCK has to be explainable by pointing at something.
+  matchTerms   String[]
+  createdAt    DateTime       @default(now()) @db.Timestamptz(6)
+
+  definition PolicyDefinition @relation(fields: [definitionId], references: [id], onDelete: Restrict)
+
+  @@unique([definitionId, version])
+  @@map("policy_versions")
+}

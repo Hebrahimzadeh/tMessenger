@@ -23,6 +23,8 @@ import { legalRoutes, type LegalRouteOptions } from './modules/legal/legal-docum
 import { profileRoutes, type ProfileRouteOptions } from './modules/profile/profile.route';
 import { spaceSearchRoutes, type SpaceSearchRouteOptions } from './modules/spaces/space-search.route';
 import { spaceRoutes, type SpaceRouteOptions } from './modules/spaces/space.route';
+import { createSpaceCreationGate } from './modules/spaces/space-creation-gate';
+import { createPrismaPolicyRuleSource } from './modules/ai/capabilities/policy.repository';
 import { storageRoutes, type StorageRouteOptions } from './modules/storage/storage.route';
 import { FakeStorageProvider } from './modules/storage/fake-storage-provider';
 import type { StorageProvider } from './modules/storage/storage-provider';
@@ -174,9 +176,29 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     phoneEncryptionKey: 'test-only-default-phone-encryption-key-prod',
     ...admin,
   });
+  // One orchestrator, shared by the /ai/suggest route and the space-creation
+  // gate. Built here rather than twice, so a real provider configured by
+  // server.ts reaches both and a test instance's null provider reaches
+  // neither - no provider by default, because a test instance must never be
+  // able to dial a real vendor.
+  const resolvedOrchestrator =
+    ai?.orchestrator ??
+    new AiOrchestrator({
+      provider: null,
+      repository: createPrismaOrchestratorRepository(() => app.db),
+      dailyBudgetMicros: null,
+    });
+
   app.register(spaceRoutes, {
     prefix: '/v1/spaces',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    spaceCreationGate: createSpaceCreationGate(
+      {
+        orchestrator: resolvedOrchestrator,
+        policy: createPrismaPolicyRuleSource(() => app.db),
+      },
+      { onFailure: (error) => app.log.error({ err: error }, 'space creation gate failed closed') }
+    ),
     ...spaces,
   });
   app.register(spaceSearchRoutes, {
@@ -213,15 +235,7 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
   app.register(aiRoutes, {
     prefix: '/v1',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
-    // No provider by default: a test instance must never be able to dial a
-    // real vendor, and server.ts supplies the real one when a key exists.
-    orchestrator:
-      ai?.orchestrator ??
-      new AiOrchestrator({
-        provider: null,
-        repository: createPrismaOrchestratorRepository(app.db),
-        dailyBudgetMicros: null,
-      }),
+    orchestrator: resolvedOrchestrator,
     ...ai,
   });
   app.register(awarenessRoutes, {

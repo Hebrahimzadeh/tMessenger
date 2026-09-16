@@ -17,6 +17,7 @@ import {
   resolveSpaceInvite,
   revokeSpaceInvite,
   RoleNotFoundError,
+  SpaceBlockedError,
   SpaceNotEditableError,
   SpaceNotFoundError,
   updateSpaceDefinition,
@@ -25,6 +26,14 @@ import {
   type SpaceRoleRecord,
   type SpaceVersionRecord,
 } from './space.service';
+import { brokenPolicySource, emptyPolicySource, fixtureGate } from '../ai/capabilities/policy.fixtures';
+
+/**
+ * The gate every test here uses: the real one, over the seeded baseline,
+ * with no model behind it. A fake gate would prove only that the service
+ * passes a verdict through; this proves the verdicts themselves.
+ */
+const gate = fixtureGate();
 
 interface FakeSpace {
   id: string;
@@ -42,6 +51,15 @@ function fakeSpaceRepo() {
   const spaceAdmins = new Set<string>(); // `${userId}:${spaceId}`
   const roleMemberships = new Set<string>(); // `${userId}:${roleId}`
   const invites = new Map<string, { spaceId: string; revokedAt: Date | null }>();
+  /** Everything `setGateVerdict` was told, so a test can assert what the audit trail would carry. */
+  const gateAudit: {
+    spaceId: string;
+    versionNumber: number;
+    verdict: string;
+    policyVersionRef: string;
+    matchedPolicyRules: string[];
+    actorId: string;
+  }[] = [];
   // Real UUIDs, not "space-1"-style ids - getSpace() distinguishes an id
   // lookup from a slug lookup by shape, so the fixture needs to match what
   // the real Postgres-backed ids actually look like.
@@ -135,12 +153,13 @@ function fakeSpaceRepo() {
       return { versionNumber };
     },
 
-    async setGateVerdict(spaceId, versionNumber, verdict, reason, newStatus) {
+    async setGateVerdict({ spaceId, versionNumber, verdict, reason, newStatus, policyVersionRef, matchedPolicyRules, actorId }) {
       const versions = versionsBySpace.get(spaceId)!;
       const version = versions.find((v) => v.versionNumber === versionNumber)!;
       version.gateVerdict = verdict;
       version.gateReason = reason;
       spaces.get(spaceId)!.status = newStatus;
+      gateAudit.push({ spaceId, versionNumber, verdict, policyVersionRef, matchedPolicyRules, actorId });
     },
 
     async publish(spaceId) {
@@ -189,7 +208,7 @@ function fakeSpaceRepo() {
     },
   };
 
-  return { repo, spaceAdmins, isRoleMember: (userId: string, roleId: string) => roleMemberships.has(`${userId}:${roleId}`) };
+  return { repo, spaceAdmins, gateAudit, spaceCount: () => spaces.size, isRoleMember: (userId: string, roleId: string) => roleMemberships.has(`${userId}:${roleId}`) };
 }
 
 const TWO_PRIMARY_ROLES: SpaceRoleInputRecord[] = [
@@ -199,7 +218,7 @@ const TWO_PRIMARY_ROLES: SpaceRoleInputRecord[] = [
 const VALID_PURPOSE = 'این بستر برای هماهنگی داوطلبانه‌ی نگهداری باغچه‌ی محله تشکیل شده است.';
 
 async function createAndFillValidDraft(repo: SpaceRepository, creatorId: string) {
-  const { id } = await createSpace(repo, creatorId, 'باغ محله');
+  const { id } = await createSpace(repo, gate, creatorId, 'باغ محله');
   await updateSpaceDefinition(repo, id, creatorId, {
     title: 'باغ محله',
     purpose: VALID_PURPOSE,
@@ -213,7 +232,7 @@ async function createAndFillValidDraft(repo: SpaceRepository, creatorId: string)
 describe('createSpace', () => {
   it('any authenticated user may create a draft, getting back a generated slug', async () => {
     const { repo } = fakeSpaceRepo();
-    const result = await createSpace(repo, 'user-1', 'باغ محله');
+    const result = await createSpace(repo, gate, 'user-1', 'باغ محله');
     expect(result.slug).toBe('باغ-محله');
 
     const space = await getSpace(repo, result.id, 'user-1');
@@ -223,8 +242,8 @@ describe('createSpace', () => {
 
   it('resolves a slug collision deterministically', async () => {
     const { repo } = fakeSpaceRepo();
-    await createSpace(repo, 'user-1', 'باغ محله');
-    const second = await createSpace(repo, 'user-2', 'باغ محله');
+    await createSpace(repo, gate, 'user-1', 'باغ محله');
+    const second = await createSpace(repo, gate, 'user-2', 'باغ محله');
     expect(second.slug).toBe('باغ-محله-2');
   });
 });
@@ -232,7 +251,7 @@ describe('createSpace', () => {
 describe('updateSpaceDefinition', () => {
   it('the creator can edit, producing a new immutable version and resetting status to DRAFT', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
 
     const result = await updateSpaceDefinition(repo, id, 'user-1', {
       title: 'باغ محله',
@@ -251,7 +270,7 @@ describe('updateSpaceDefinition', () => {
 
   it('a space admin (scoped RoleAssignment) may also edit', async () => {
     const { repo, spaceAdmins } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     spaceAdmins.add(`user-2:${id}`);
 
     await expect(
@@ -267,7 +286,7 @@ describe('updateSpaceDefinition', () => {
 
   it('rejects an unrelated user with NotSpaceEditorError', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
 
     await expect(
       updateSpaceDefinition(repo, id, 'stranger', {
@@ -282,7 +301,7 @@ describe('updateSpaceDefinition', () => {
 
   it('rejects duplicate role keys before touching the repository', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
 
     await expect(
       updateSpaceDefinition(repo, id, 'user-1', {
@@ -314,7 +333,7 @@ describe('updateSpaceDefinition', () => {
   it('rejects editing an already-PUBLISHED space', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
     await publishSpace(repo, id, 'user-1');
 
     await expect(
@@ -334,22 +353,29 @@ describe('precheckSpace', () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
 
-    const result = await precheckSpace(repo, id, 'user-1');
-    expect(result).toEqual({ verdict: 'ALLOW', reason: expect.any(String), status: 'DRAFT' });
+    const result = await precheckSpace(repo, gate, id, 'user-1');
+    expect(result).toEqual({
+      verdict: 'ALLOW',
+      reason: expect.any(String),
+      status: 'DRAFT',
+      policyVersionRef: 'baseline:v1:8rules',
+      matchedPolicyRules: [],
+      guidance: expect.objectContaining({ creationDecision: 'ALLOW' }),
+    });
   });
 
   it('REVISE verdict moves status to PRECHECK_REQUIRED', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله'); // purpose still empty
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله'); // purpose still empty
 
-    const result = await precheckSpace(repo, id, 'user-1');
+    const result = await precheckSpace(repo, gate, id, 'user-1');
     expect(result.verdict).toBe('REVISE');
     expect(result.status).toBe('PRECHECK_REQUIRED');
   });
 
   it('HUMAN_REVIEW verdict moves status to HUMAN_REVIEW', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await updateSpaceDefinition(repo, id, 'user-1', {
       title: 'باغ محله',
       purpose: `${VALID_PURPOSE} با تضمین سود ثابت.`,
@@ -358,14 +384,14 @@ describe('precheckSpace', () => {
       policyVersion: 1,
     });
 
-    const result = await precheckSpace(repo, id, 'user-1');
+    const result = await precheckSpace(repo, gate, id, 'user-1');
     expect(result.verdict).toBe('HUMAN_REVIEW');
     expect(result.status).toBe('HUMAN_REVIEW');
   });
 
   it('BLOCK verdict moves status to PRECHECK_REQUIRED (never publishable, never silently public)', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await updateSpaceDefinition(repo, id, 'user-1', {
       title: 'باغ محله',
       purpose: `${VALID_PURPOSE} این بستر برای قمار است.`,
@@ -374,7 +400,7 @@ describe('precheckSpace', () => {
       policyVersion: 1,
     });
 
-    const result = await precheckSpace(repo, id, 'user-1');
+    const result = await precheckSpace(repo, gate, id, 'user-1');
     expect(result.verdict).toBe('BLOCK');
     expect(result.status).toBe('PRECHECK_REQUIRED');
   });
@@ -382,7 +408,7 @@ describe('precheckSpace', () => {
   it('a fresh edit after an ALLOW resets the verdict, requiring a new precheck', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
 
     await updateSpaceDefinition(repo, id, 'user-1', {
       title: 'باغ محله (ویرایش)',
@@ -397,8 +423,84 @@ describe('precheckSpace', () => {
 
   it('rejects a non-editor', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
-    await expect(precheckSpace(repo, id, 'stranger')).rejects.toThrow(NotSpaceEditorError);
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
+    await expect(precheckSpace(repo, gate, id, 'stranger')).rejects.toThrow(NotSpaceEditorError);
+  });
+
+  it('records the baseline and the matched rules alongside the verdict, for the audit trail', async () => {
+    const { repo, gateAudit } = fakeSpaceRepo();
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
+    await updateSpaceDefinition(repo, id, 'user-1', {
+      title: 'باغ محله',
+      purpose: `${VALID_PURPOSE} این بستر برای قمار است.`,
+      participationMethods: ['حضوری'],
+      roles: TWO_PRIMARY_ROLES,
+      policyVersion: 1,
+    });
+
+    const result = await precheckSpace(repo, gate, id, 'user-1');
+
+    expect(result.matchedPolicyRules[0]).toContain('gambling@v1');
+    expect(gateAudit).toHaveLength(1);
+    expect(gateAudit[0]).toMatchObject({
+      verdict: 'BLOCK',
+      actorId: 'user-1',
+      policyVersionRef: 'baseline:v1:8rules',
+      matchedPolicyRules: result.matchedPolicyRules,
+    });
+  });
+
+  it('an outage in the gate becomes HUMAN_REVIEW, never an ALLOW', async () => {
+    const { repo } = fakeSpaceRepo();
+    const id = await createAndFillValidDraft(repo, 'user-1');
+
+    // The very definition that was about to be approved.
+    expect((await precheckSpace(repo, gate, id, 'user-1')).verdict).toBe('ALLOW');
+
+    const result = await precheckSpace(repo, fixtureGate(brokenPolicySource), id, 'user-1');
+    expect(result.verdict).toBe('HUMAN_REVIEW');
+    expect(result.status).toBe('HUMAN_REVIEW');
+    expect(result.guidance).toBeNull();
+  });
+
+  it('an empty baseline does not become a clean bill of health', async () => {
+    const { repo } = fakeSpaceRepo();
+    const id = await createAndFillValidDraft(repo, 'user-1');
+
+    const result = await precheckSpace(repo, fixtureGate(emptyPolicySource), id, 'user-1');
+    expect(result.verdict).toBe('HUMAN_REVIEW');
+  });
+
+  it('a HUMAN_REVIEW space cannot be published', async () => {
+    const { repo } = fakeSpaceRepo();
+    const id = await createAndFillValidDraft(repo, 'user-1');
+    await precheckSpace(repo, fixtureGate(brokenPolicySource), id, 'user-1');
+
+    await expect(publishSpace(repo, id, 'user-1')).rejects.toThrow(GateNotAllowedError);
+  });
+});
+
+describe('a blocked title never claims a slug', () => {
+  it('creates no space at all', async () => {
+    const { repo, spaceCount } = fakeSpaceRepo();
+
+    await expect(createSpace(repo, gate, 'user-1', 'باشگاه قمار محله')).rejects.toThrow(SpaceBlockedError);
+    // "BLOCK هیچ Space/slug عمومی نسازد" - not a hidden draft, not a
+    // reserved name: no row was written, so no slug was taken either.
+    expect(spaceCount()).toBe(0);
+  });
+
+  it('lets an ordinary title through', async () => {
+    const { repo } = fakeSpaceRepo();
+    const { slug } = await createSpace(repo, gate, 'user-1', 'امانات ابزار محله');
+    expect(slug.length).toBeGreaterThan(0);
+  });
+
+  it('does not refuse a title when the baseline is unreadable', async () => {
+    const { repo } = fakeSpaceRepo();
+    // A draft is invisible to everyone but its creator, so an outage here
+    // costs nothing; the precheck before publishing is what fails closed.
+    await expect(createSpace(repo, fixtureGate(brokenPolicySource), 'user-1', 'باشگاه قمار محله')).resolves.toBeTruthy();
   });
 });
 
@@ -406,7 +508,7 @@ describe('publishSpace', () => {
   it('publishes only after an ALLOW precheck on the current version', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
 
     const result = await publishSpace(repo, id, 'user-1');
     expect(result.status).toBe('PUBLISHED');
@@ -424,7 +526,7 @@ describe('publishSpace', () => {
 
   it('rejects publishing while in HUMAN_REVIEW ("HUMAN_REVIEW قابل انتشار نباشد")', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await updateSpaceDefinition(repo, id, 'user-1', {
       title: 'باغ محله',
       purpose: `${VALID_PURPOSE} با تضمین سود ثابت.`,
@@ -432,7 +534,7 @@ describe('publishSpace', () => {
       roles: TWO_PRIMARY_ROLES,
       policyVersion: 1,
     });
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
 
     await expect(publishSpace(repo, id, 'user-1')).rejects.toThrow(GateNotAllowedError);
   });
@@ -440,7 +542,7 @@ describe('publishSpace', () => {
   it('rejects re-publishing an already-PUBLISHED space', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
     await publishSpace(repo, id, 'user-1');
 
     await expect(publishSpace(repo, id, 'user-1')).rejects.toThrow(SpaceNotEditableError);
@@ -449,7 +551,7 @@ describe('publishSpace', () => {
   it('rejects a non-editor', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
     await expect(publishSpace(repo, id, 'stranger')).rejects.toThrow(NotSpaceEditorError);
   });
 });
@@ -458,7 +560,7 @@ describe('archiveSpace', () => {
   it('the creator can archive a published space', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
     await publishSpace(repo, id, 'user-1');
 
     const result = await archiveSpace(repo, id, 'user-1');
@@ -467,13 +569,13 @@ describe('archiveSpace', () => {
 
   it('rejects a non-creator/non-admin', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await expect(archiveSpace(repo, id, 'stranger')).rejects.toThrow(NotSpaceEditorError);
   });
 
   it('rejects archiving an already-archived space (no un-archive in MVP)', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await archiveSpace(repo, id, 'user-1');
     await expect(archiveSpace(repo, id, 'user-1')).rejects.toThrow(SpaceNotEditableError);
   });
@@ -483,7 +585,7 @@ describe('getSpace', () => {
   it('a PUBLISHED space is visible to an anonymous caller, with no gate field', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
     await publishSpace(repo, id, 'user-1');
 
     const view = await getSpace(repo, id, null);
@@ -494,7 +596,7 @@ describe('getSpace', () => {
   it("canManage stays true for the creator even after publishing - a real bug found in Task 13: gate's mere presence was originally the only ownership signal, and gate is always omitted once PUBLISHED regardless of who's asking, which silently broke owner-only UI (like Task 13's own health panel) for every published space", async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
     await publishSpace(repo, id, 'user-1');
 
     const ownerView = await getSpace(repo, id, 'user-1');
@@ -510,20 +612,20 @@ describe('getSpace', () => {
 
   it('a DRAFT space 404s for an anonymous caller', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await expect(getSpace(repo, id, null)).rejects.toThrow(SpaceNotFoundError);
   });
 
   it('a DRAFT space 404s for an authenticated but unrelated caller (no existence leak)', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await expect(getSpace(repo, id, 'stranger')).rejects.toThrow(SpaceNotFoundError);
   });
 
   it('the creator sees a DRAFT space with its gate field included', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
-    await precheckSpace(repo, id, 'user-1');
+    await precheckSpace(repo, gate, id, 'user-1');
 
     const view = await getSpace(repo, id, 'user-1');
     expect(view.gate).toEqual({ verdict: 'ALLOW', reason: expect.any(String) });
@@ -531,7 +633,7 @@ describe('getSpace', () => {
 
   it('a BLOCK-verdict space (status PRECHECK_REQUIRED) 404s for an anonymous caller - "BLOCK هیچ slug/Space عمومی نسازد"', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await updateSpaceDefinition(repo, id, 'user-1', {
       title: 'باغ محله',
       purpose: `${VALID_PURPOSE} این بستر برای قمار است.`,
@@ -539,7 +641,7 @@ describe('getSpace', () => {
       roles: TWO_PRIMARY_ROLES,
       policyVersion: 1,
     });
-    const precheck = await precheckSpace(repo, id, 'user-1');
+    const precheck = await precheckSpace(repo, gate, id, 'user-1');
     expect(precheck.verdict).toBe('BLOCK');
 
     await expect(getSpace(repo, id, null)).rejects.toThrow(SpaceNotFoundError);
@@ -547,7 +649,7 @@ describe('getSpace', () => {
 
   it('a HUMAN_REVIEW space 404s for an anonymous caller - "HUMAN_REVIEW ... نشت عمومی صفر"', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await updateSpaceDefinition(repo, id, 'user-1', {
       title: 'باغ محله',
       purpose: `${VALID_PURPOSE} با تضمین سود ثابت.`,
@@ -555,7 +657,7 @@ describe('getSpace', () => {
       roles: TWO_PRIMARY_ROLES,
       policyVersion: 1,
     });
-    const precheck = await precheckSpace(repo, id, 'user-1');
+    const precheck = await precheckSpace(repo, gate, id, 'user-1');
     expect(precheck.verdict).toBe('HUMAN_REVIEW');
 
     await expect(getSpace(repo, id, null)).rejects.toThrow(SpaceNotFoundError);
@@ -564,7 +666,7 @@ describe('getSpace', () => {
 
   it('resolves by slug as well as by id', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id, slug } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id, slug } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     const bySlug = await getSpace(repo, slug, 'user-1');
     expect(bySlug.id).toBe(id);
   });
@@ -596,7 +698,7 @@ describe('space roles: join/leave', () => {
 describe('space invites', () => {
   it('the creator can create, resolve, and revoke an invite; a revoked token no longer resolves', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id, slug } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id, slug } = await createSpace(repo, gate, 'user-1', 'باغ محله');
 
     const { token } = await createSpaceInvite(repo, id, 'user-1');
     const resolved = await resolveSpaceInvite(repo, token);
@@ -608,7 +710,7 @@ describe('space invites', () => {
 
   it('rejects an unrelated user creating an invite', async () => {
     const { repo } = fakeSpaceRepo();
-    const { id } = await createSpace(repo, 'user-1', 'باغ محله');
+    const { id } = await createSpace(repo, gate, 'user-1', 'باغ محله');
     await expect(createSpaceInvite(repo, id, 'stranger')).rejects.toThrow(NotSpaceEditorError);
   });
 

@@ -4,6 +4,7 @@ import cookie from '@fastify/cookie';
 import { describe, expect, it } from 'vitest';
 import type { SpaceStatus } from '@taavon/database';
 import { spaceRoutes } from './space.route';
+import { fixtureGate } from '../ai/capabilities/policy.fixtures';
 import { ACCESS_TOKEN_COOKIE, signAccessToken } from '../auth/session-tokens';
 import type { SpaceRepository, SpaceRoleRecord, SpaceVersionRecord } from './space.service';
 import type { SpaceHealthRepository } from '@taavon/space-health';
@@ -92,7 +93,7 @@ function fakeSpaceRepo(): SpaceRepository {
       spaces.get(spaceId)!.status = 'DRAFT';
       return { versionNumber };
     },
-    async setGateVerdict(spaceId, versionNumber, verdict, reason, newStatus) {
+    async setGateVerdict({ spaceId, versionNumber, verdict, reason, newStatus }) {
       const version = versionsBySpace.get(spaceId)!.find((v) => v.versionNumber === versionNumber)!;
       version.gateVerdict = verdict;
       version.gateReason = reason;
@@ -159,6 +160,9 @@ function buildApp(repo: SpaceRepository, healthRepo?: SpaceHealthRepository) {
     sessionHmacKey: SESSION_HMAC_KEY,
     spaceRepository: repo,
     spaceHealthRepository: healthRepo ?? fakeHealthRepo(),
+    // The real gate over the seeded baseline. The route's own fallback would
+    // reach for `app.db`, which these tests deliberately do not have.
+    spaceCreationGate: fixtureGate(),
   });
   return app;
 }
@@ -203,6 +207,30 @@ describe('POST /v1/spaces', () => {
     expect(body.gate).toEqual({ verdict: null, reason: null });
     await app.close();
   });
+
+  it('refuses a title that matches an explicit rule, and creates nothing', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/spaces',
+      cookies: sessionCookieFor(USER_1),
+      payload: { title: 'باشگاه قمار محله' },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error.code).toBe('SPACE_BLOCKED');
+
+    // No slug was claimed, so the same title is not permanently spoiled for
+    // someone who rewrites it.
+    const retry = await app.inject({
+      method: 'POST',
+      url: '/v1/spaces',
+      cookies: sessionCookieFor(USER_1),
+      payload: { title: 'باشگاه بازی محله' },
+    });
+    expect(retry.statusCode).toBe(200);
+    await app.close();
+  });
 });
 
 describe('the full create -> update -> precheck -> publish -> get(anonymous) flow', () => {
@@ -238,7 +266,15 @@ describe('the full create -> update -> precheck -> publish -> get(anonymous) flo
       cookies: sessionCookieFor(USER_1),
     });
     expect(precheck.statusCode).toBe(200);
-    expect(precheck.json()).toMatchObject({ verdict: 'ALLOW', status: 'DRAFT' });
+    expect(precheck.json()).toMatchObject({
+      verdict: 'ALLOW',
+      status: 'DRAFT',
+      policyVersionRef: 'baseline:v1:8rules',
+      matchedPolicyRules: [],
+    });
+    // The creative half travels with the verdict, so the composer has
+    // something to show without a second round trip.
+    expect(precheck.json().guidance.participationRoles.length).toBeGreaterThan(0);
 
     const published = await app.inject({
       method: 'POST',

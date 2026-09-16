@@ -51,6 +51,7 @@ describe.skipIf(!databaseAvailable)('SpaceRepository: real Postgres', () => {
     await getPrisma().spaceParticipationRole.deleteMany({ where: { spaceId: { in: spaceIds } } });
     await getPrisma().spaceDefinitionVersion.deleteMany({ where: { spaceId: { in: spaceIds } } });
     await getPrisma().outboxEvent.deleteMany({ where: { aggregateId: { in: spaceIds } } });
+    await getPrisma().auditEvent.deleteMany({ where: { targetType: 'Space', targetId: { in: spaceIds } } });
     await getPrisma().space.deleteMany({ where: { id: { in: spaceIds } } });
   });
 
@@ -132,11 +133,50 @@ describe.skipIf(!databaseAvailable)('SpaceRepository: real Postgres', () => {
     const repo = createPrismaSpaceRepository(getPrisma());
     const { id } = await repo.createDraft({ title: 'باغ محله', slug: 'baagh-mahalle-gate-test', policyVersion: 1, creatorId: userId });
 
-    await repo.setGateVerdict(id, 1, 'ALLOW', 'looks fine', 'DRAFT');
+    await repo.setGateVerdict({
+      spaceId: id,
+      versionNumber: 1,
+      verdict: 'ALLOW',
+      reason: 'looks fine',
+      newStatus: 'DRAFT',
+      actorId: userId,
+      policyVersionRef: 'baseline:v1:8rules',
+      matchedPolicyRules: [],
+    });
     const found = await repo.findById(id);
     expect(found?.latestVersion.gateVerdict).toBe('ALLOW');
     expect(found?.latestVersion.gateReason).toBe('looks fine');
     expect(found?.status).toBe('DRAFT');
+  });
+
+  it('records which baseline decided it, in the same transaction as the verdict', async () => {
+    const repo = createPrismaSpaceRepository(getPrisma());
+    const { id } = await repo.createDraft({ title: 'باغ محله', slug: 'baagh-mahalle-gate-audit', policyVersion: 1, creatorId: userId });
+
+    await repo.setGateVerdict({
+      spaceId: id,
+      versionNumber: 1,
+      verdict: 'BLOCK',
+      reason: 'یک قاعدهٔ صریح مطابقت دارد.',
+      newStatus: 'PRECHECK_REQUIRED',
+      actorId: userId,
+      policyVersionRef: 'baseline:v1:8rules',
+      matchedPolicyRules: ['gambling@v1 — قانون مجازات اسلامی، مواد ۷۰۵ تا ۷۱۱'],
+    });
+
+    // A stored BLOCK that cannot be traced to a rule and a law is a refusal
+    // without a reason - "منبع policyVersion در نتیجه و audit ثبت شود".
+    const audit = await getPrisma().auditEvent.findFirst({
+      where: { targetType: 'Space', targetId: id, action: 'space.gate_verdict' },
+    });
+    expect(audit).not.toBeNull();
+    expect(audit!.metadata).toMatchObject({
+      verdict: 'BLOCK',
+      versionNumber: 1,
+      policyVersionRef: 'baseline:v1:8rules',
+      matchedPolicyRules: ['gambling@v1 — قانون مجازات اسلامی، مواد ۷۰۵ تا ۷۱۱'],
+    });
+    expect(audit!.actorId).toBe(userId);
   });
 
   it('publish sets status/publishedAt and appends a space.published outbox event', async () => {

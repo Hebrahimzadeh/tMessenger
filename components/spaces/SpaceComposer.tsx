@@ -6,18 +6,20 @@ import {
   precheckSpaceResponseSchema,
   publishSpaceResponseSchema,
   spaceResponseSchema,
+  type SpaceCreationGuidance,
   type SpaceGateVerdict,
 } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { SimilarSpaces } from './SimilarSpaces';
+import { CooperationGuidance, type AcceptedGuidance } from './CooperationGuidance';
 
 type Step =
   | { name: 'describe' }
   | { name: 'roles' }
-  | { name: 'review'; verdict: SpaceGateVerdict; reason: string }
+  | { name: 'review'; verdict: SpaceGateVerdict; reason: string; guidance: SpaceCreationGuidance | null }
   | { name: 'published' };
 
-/** Starting suggestions the user edits, not anything extracted by AI - no such analysis exists yet (Task 24 adds real guidance). Framed in the UI as a starting point, never presented as inferred from the free text. */
+/** Starting suggestions the user edits before any guidance exists. Framed in the UI as a starting point, never presented as inferred from the free text - the real guidance arrives with the precheck. */
 const STARTER_PRIMARY_ROLE_1 = 'سازمان‌دهنده';
 const STARTER_PRIMARY_ROLE_2 = 'همکار';
 
@@ -90,12 +92,42 @@ export function SpaceComposer() {
         }),
       });
       const precheck = precheckSpaceResponseSchema.parse(await apiFetch(`/spaces/${spaceId}/precheck`, { method: 'POST' }));
-      setStep({ name: 'review', verdict: precheck.verdict, reason: precheck.reason });
+      setStep({ name: 'review', verdict: precheck.verdict, reason: precheck.reason, guidance: precheck.guidance });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'خطای غیرمنتظره‌ای رخ داد.');
     } finally {
       setSubmitting(false);
     }
+  }
+
+
+  /**
+   * Folds what the person accepted back into the form they came from, then
+   * returns them to it.
+   *
+   * Deliberately not straight to a re-precheck: they see the applied text in
+   * their own fields and press ادامه themselves, so nothing the guidance
+   * proposed reaches their space without them looking at it.
+   */
+  function applyAccepted(accepted: AcceptedGuidance) {
+    for (const revision of accepted.revisions) {
+      if (revision.field === 'title') setTitle(revision.value);
+      if (revision.field === 'purpose') setPurpose(revision.value);
+      if (revision.field === 'participationMethods') {
+        setParticipationMethodsText((current) => {
+          const existing = splitParticipationMethods(current);
+          return existing.includes(revision.value) ? current : [...existing, revision.value].join('، ');
+        });
+      }
+    }
+
+    const primaries = accepted.participationRoles.filter((role) => role.isPrimary);
+    if (primaries[0]) setPrimaryRole1(primaries[0].title);
+    if (primaries[1]) setPrimaryRole2(primaries[1].title);
+    const supplementary = accepted.participationRoles.filter((role) => !role.isPrimary).map((role) => role.title);
+    if (supplementary.length > 0) setSupplementaryRoles(supplementary);
+
+    setStep({ name: 'roles' });
   }
 
   async function handlePublish() {
@@ -261,59 +293,45 @@ export function SpaceComposer() {
       <div dir="rtl" className="p-6 text-right">
         <h1 className="mb-4 text-xl font-bold text-gray-900">پیش‌نمایش و بررسی</h1>
 
-        {step.verdict === 'ALLOW' && (
-          <div className="space-y-4">
-            <p className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-              این بستر آمادهٔ انتشار است.
-            </p>
-            {error && (
-              <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                {error}
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={handlePublish}
-              disabled={submitting}
-              className="w-full rounded-xl bg-blue-600 p-3 font-medium text-white disabled:opacity-50"
-            >
-              انتشار
-            </button>
-          </div>
+        {error && (
+          <p role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {error}
+          </p>
         )}
 
-        {step.verdict === 'REVISE' && (
+        {step.guidance ? (
           <div className="space-y-4">
-            <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{step.reason}</p>
+            <CooperationGuidance
+              guidance={step.guidance}
+              onApply={applyAccepted}
+              onEdit={() => setStep({ name: 'roles' })}
+              busy={submitting}
+            />
+            {step.verdict === 'ALLOW' && (
+              <button
+                type="button"
+                onClick={handlePublish}
+                disabled={submitting}
+                className="w-full rounded-xl bg-blue-600 p-3 font-medium text-white disabled:opacity-50"
+              >
+                انتشار
+              </button>
+            )}
+          </div>
+        ) : (
+          /* The gate failed closed, so there is a verdict but nothing to show
+             beside it. HUMAN_REVIEW is what an outage produces, and the copy
+             here says so plainly rather than implying the person did
+             something wrong. */
+          <div className="space-y-4">
+            <p className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">{step.reason}</p>
+            <p className="text-sm text-gray-500">پیش‌نویس شما ذخیره شده و تا پایان بررسی به‌صورت عمومی منتشر نمی‌شود.</p>
             <button
               type="button"
               onClick={() => setStep({ name: 'roles' })}
               className="w-full rounded-xl border border-gray-300 p-3 font-medium text-gray-700"
             >
               بازگشت و ویرایش
-            </button>
-          </div>
-        )}
-
-        {step.verdict === 'HUMAN_REVIEW' && (
-          <div className="space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-4">
-            <p className="text-sm text-gray-700">این بستر نیاز به بررسی دستی دارد.</p>
-            <p className="text-sm text-gray-500">
-              پیش‌نویس شما ذخیره شده و تا پایان بررسی، به‌صورت عمومی منتشر نخواهد شد.
-            </p>
-          </div>
-        )}
-
-        {step.verdict === 'BLOCK' && (
-          <div className="space-y-4">
-            <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{step.reason}</p>
-            <p className="text-sm text-gray-600">این بستر به این شکل منتشر نخواهد شد.</p>
-            <button
-              type="button"
-              onClick={() => setStep({ name: 'roles' })}
-              className="w-full rounded-xl border border-gray-300 p-3 font-medium text-gray-700"
-            >
-              ویرایش و تلاش دوباره
             </button>
           </div>
         )}

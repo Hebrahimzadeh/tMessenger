@@ -16,6 +16,10 @@ import { getOptionalSession, requireSession } from '../auth/session-guard';
 import { createPrismaSpaceHealthRepository, type SpaceHealthRepository } from '@taavon/space-health';
 import { getSpaceHealth } from './space-health.service';
 import { createPrismaSpaceRepository } from './space.repository';
+import { createSpaceCreationGate, type SpaceCreationGate } from './space-creation-gate';
+import { createPrismaPolicyRuleSource } from '../ai/capabilities/policy.repository';
+import { AiOrchestrator } from '../ai/orchestrator';
+import { createPrismaOrchestratorRepository } from '../ai/ai.repository';
 import {
   archiveSpace,
   createSpace,
@@ -32,6 +36,7 @@ import {
   resolveSpaceInvite,
   revokeSpaceInvite,
   RoleNotFoundError,
+  SpaceBlockedError,
   SpaceNotEditableError,
   SpaceNotFoundError,
   updateSpaceDefinition,
@@ -42,6 +47,8 @@ export interface SpaceRouteOptions {
   sessionHmacKey: string;
   spaceRepository?: SpaceRepository;
   spaceHealthRepository?: SpaceHealthRepository;
+  /** Normally supplied by `buildApp`, which shares one orchestrator between this gate and `/ai/suggest`. */
+  spaceCreationGate?: SpaceCreationGate;
 }
 
 function toResponse(view: Awaited<ReturnType<typeof getSpace>>) {
@@ -65,14 +72,45 @@ export async function spaceRoutes(app: FastifyInstance, opts: SpaceRouteOptions)
   function healthRepo(): SpaceHealthRepository {
     return opts.spaceHealthRepository ?? createPrismaSpaceHealthRepository(app.db);
   }
+  // The fallback exists so this module can be registered on its own (a
+  // route-level test, say) without the caller having to assemble an
+  // orchestrator. It has no provider, which costs only the creative half:
+  // the verdict is decided by the policy rules either way.
+  function gate(): SpaceCreationGate {
+    return (
+      opts.spaceCreationGate ??
+      createSpaceCreationGate(
+        {
+          orchestrator: new AiOrchestrator({
+            provider: null,
+            repository: createPrismaOrchestratorRepository(() => app.db),
+            dailyBudgetMicros: null,
+          }),
+          policy: createPrismaPolicyRuleSource(() => app.db),
+        },
+        { onFailure: (error) => app.log.error({ err: error }, 'space creation gate failed closed') }
+      )
+    );
+  }
 
   app.post('/', async (request, reply) => {
     const user = requireSession(request, reply, opts.sessionHmacKey);
     if (!user) return;
     const body = createSpaceBodySchema.parse(request.body);
 
-    const { id } = await createSpace(repo(), user.userId, body.title);
-    return toResponse(await getSpace(repo(), id, user.userId));
+    try {
+      const { id } = await createSpace(repo(), gate(), user.userId, body.title);
+      return toResponse(await getSpace(repo(), id, user.userId));
+    } catch (err) {
+      if (err instanceof SpaceBlockedError) {
+        // 422 and no Location: nothing was created, so there is nothing to
+        // point at. The message says what to do, not what they are.
+        return reply
+          .code(422)
+          .send(apiError(request, 'SPACE_BLOCKED', 'این عنوان با یکی از قواعد صریح پلتفرم مغایرت دارد. عنوان دیگری بنویسید.'));
+      }
+      throw err;
+    }
   });
 
   app.get('/invites/:token', async (request, reply) => {
@@ -134,7 +172,7 @@ export async function spaceRoutes(app: FastifyInstance, opts: SpaceRouteOptions)
     const { spaceId } = request.params as { spaceId: string };
 
     try {
-      const result = await precheckSpace(repo(), spaceId, user.userId);
+      const result = await precheckSpace(repo(), gate(), spaceId, user.userId);
       return precheckSpaceResponseSchema.parse(result);
     } catch (err) {
       if (err instanceof SpaceNotFoundError) {

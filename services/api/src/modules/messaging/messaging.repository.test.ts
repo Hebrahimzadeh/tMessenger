@@ -377,16 +377,17 @@ describe.skipIf(!databaseAvailable)('an assistant suggestion publishes nothing o
   }
 
   it('stores the suggestion as pending and creates no card, space or outbox event', async () => {
-    const cardsBefore = await prisma.card.count();
-    const spacesBefore = await prisma.space.count();
     const { owner, convo, message } = await withAssistantProposal();
 
     expect(message.proposalState).toBe('PENDING');
     expect(message.proposedAction).toMatchObject({ kind: 'CARD_DRAFT', title: 'کارت پیشنهادی' });
 
-    // Nothing at all happened beyond a message being stored.
-    await expect(prisma.card.count()).resolves.toBe(cardsBefore);
-    await expect(prisma.space.count()).resolves.toBe(spacesBefore);
+    // Nothing at all happened beyond a message being stored. Scoped to this
+    // test's own freshly-created owner rather than counted globally: other
+    // files in this suite create spaces and cards in parallel, so a global
+    // before/after count is a race, not an assertion.
+    await expect(prisma.card.count({ where: { authorId: owner.id } })).resolves.toBe(0);
+    await expect(prisma.space.count({ where: { creatorId: owner.id } })).resolves.toBe(0);
     await expect(prisma.outboxEvent.count({ where: { aggregateId: convo.id } })).resolves.toBe(0);
     await expect(prisma.awarenessEvent.count({ where: { subjectId: convo.id } })).resolves.toBe(0);
 
@@ -394,23 +395,21 @@ describe.skipIf(!databaseAvailable)('an assistant suggestion publishes nothing o
   });
 
   it('still creates nothing when the person confirms - there is no tool to run until M5, and the decision alone is not one', async () => {
-    const cardsBefore = await prisma.card.count();
     const { owner, convo, message } = await withAssistantProposal();
 
     const decided = await repo.decideProposal({ messageId: message.id, decision: 'CONFIRM' });
     expect(decided.proposalState).toBe('CONFIRMED');
-    await expect(prisma.card.count()).resolves.toBe(cardsBefore);
+    await expect(prisma.card.count({ where: { authorId: owner.id } })).resolves.toBe(0);
 
     await cleanUp(owner.id, convo.id);
   });
 
   it('records a rejection without creating anything either', async () => {
-    const cardsBefore = await prisma.card.count();
     const { owner, convo, message } = await withAssistantProposal();
 
     const decided = await repo.decideProposal({ messageId: message.id, decision: 'REJECT' });
     expect(decided.proposalState).toBe('REJECTED');
-    await expect(prisma.card.count()).resolves.toBe(cardsBefore);
+    await expect(prisma.card.count({ where: { authorId: owner.id } })).resolves.toBe(0);
 
     await cleanUp(owner.id, convo.id);
   });

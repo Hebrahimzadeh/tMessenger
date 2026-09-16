@@ -1,4 +1,7 @@
 import type { SpaceGateVerdict } from '@taavon/database';
+import type { CreationDecision, SpaceCreationGuidance } from '@taavon/contracts';
+import { guideSpaceCreation, type SpaceGuidanceDeps } from '../ai/capabilities/space-guidance';
+import { evaluatePolicy, policyVersionRef, type PolicyRuleSource } from '../ai/capabilities/policy-rules';
 
 export interface SpaceGateDefinitionInput {
   title: string;
@@ -10,63 +13,147 @@ export interface SpaceGateDefinitionInput {
 export interface SpaceGateResult {
   verdict: SpaceGateVerdict;
   reason: string;
-}
-
-const MIN_PURPOSE_LENGTH = 20;
-const REQUIRED_PRIMARY_ROLE_COUNT = 2;
-
-/**
- * Explicit, clearly-disallowed content - a real moderation policy would be
- * far larger than this; this fixture list exists only to make the interim
- * rule-based gate deterministic and testable. Task 24 replaces this whole
- * adapter with a real AI provider behind the same `evaluate()` shape.
- */
-const BLOCK_TERMS = ['قمار', 'کلاهبرداری', 'فروش اسلحه', 'مواد مخدر'];
-
-/**
- * Borderline/sensitive content that is not outright banned but should not
- * be auto-approved either - this task's own acceptance bullet: "ruleهای
- * صریح fixture را BLOCK و هر مورد خارج پوشش را HUMAN_REVIEW کند، نه ALLOW
- * حدسی" (explicit fixture rules go to BLOCK; everything outside that
- * coverage goes to HUMAN_REVIEW, never a guessed ALLOW).
- */
-const REVIEW_FLAG_TERMS = ['تضمین سود', 'جمع‌آوری کمک مالی', 'دارویی'];
-
-function containsAny(haystack: string, needles: string[]): boolean {
-  return needles.some((needle) => haystack.includes(needle));
+  /** Which baseline produced this verdict, so it stays traceable after the rules change. */
+  policyVersionRef: string;
+  /** The rules that actually matched, cited by key, version and the law behind them. */
+  matchedPolicyRules: string[];
+  /** The creative half. Null when the gate failed closed and there is nothing to show. */
+  guidance: SpaceCreationGuidance | null;
 }
 
 /**
- * Temporary, rule-based `SpaceCreationGate` adapter (this task's own
- * requirement: "adapter موقت قاعده‌محور ... بساز"). Structural completeness
- * (purpose length, at least one participation method, exactly two primary
- * roles) is checked first and reported as REVISE with a specific, fixable
- * reason - these are mechanical gaps, not content-safety judgment calls.
- * Only once a definition is structurally complete does content-safety
- * fixture matching apply: an explicit BLOCK_TERMS match always wins over a
- * REVIEW_FLAG_TERMS match (a confirmed violation is reported as such, not
- * softened into "needs a human look"); anything matching neither list is
- * ALLOW; nothing is ever guessed into ALLOW from ambiguous content.
+ * The port Task 10 defined and this task finally fills. The service depends
+ * on this shape, not on the guidance module, so a future provider change is
+ * one adapter rather than a rewrite of the space pipeline.
  */
-export function evaluateSpaceCreationGate(input: SpaceGateDefinitionInput): SpaceGateResult {
-  if (input.purpose.trim().length < MIN_PURPOSE_LENGTH) {
-    return { verdict: 'REVISE', reason: `توضیح هدف را کامل‌تر بنویسید (حداقل ${MIN_PURPOSE_LENGTH} نویسه).` };
-  }
-  if (input.participationMethods.length < 1) {
-    return { verdict: 'REVISE', reason: 'حداقل یک روش مشارکت مشخص کنید.' };
-  }
-  if (input.primaryRoleCount !== REQUIRED_PRIMARY_ROLE_COUNT) {
-    return { verdict: 'REVISE', reason: 'دقیقاً دو نقش اصلی متفاوت لازم است.' };
-  }
-
-  const text = `${input.title} ${input.purpose}`;
-
-  if (containsAny(text, BLOCK_TERMS)) {
-    return { verdict: 'BLOCK', reason: 'محتوای این بستر با قوانین پلتفرم مغایرت دارد.' };
-  }
-  if (containsAny(text, REVIEW_FLAG_TERMS)) {
-    return { verdict: 'HUMAN_REVIEW', reason: 'این محتوا نیاز به بررسی دستی دارد.' };
-  }
-
-  return { verdict: 'ALLOW', reason: 'بستر با معیارهای پایه مطابقت دارد.' };
+export interface SpaceCreationGate {
+  evaluate(input: SpaceGateDefinitionInput): Promise<SpaceGateResult>;
+  /**
+   * The cheap check made before a slug is claimed, against nothing but a
+   * title. Answers only "does this obviously violate a SEVERE rule", because
+   * that is all a title can tell you.
+   */
+  blocksOnTitle(title: string): Promise<boolean>;
 }
+
+/** How long the gate waits on the policy baseline before failing closed. */
+export const GATE_TIMEOUT_MS = 5_000;
+
+export interface SpaceCreationGateOptions {
+  timeoutMs?: number;
+  /**
+   * Called with whatever made the gate fail closed.
+   *
+   * Failing closed is the right behaviour and it is also invisible: every
+   * proposal simply becomes a HUMAN_REVIEW, which looks like a busy queue
+   * rather than a broken dependency. Without this hook the cause never
+   * leaves the process, so the one thing an operator needs is the one thing
+   * they cannot get.
+   */
+  onFailure?: (error: unknown) => void;
+}
+
+const REASONS: Record<CreationDecision, string> = {
+  ALLOW: 'بستر با معیارهای پایه مطابقت دارد.',
+  REVISE: 'برای ادامه، چند مورد را کامل کنید.',
+  HUMAN_REVIEW: 'این درخواست را یک نفر بررسی می‌کند. چیزی رد نشده است.',
+  BLOCK: 'این درخواست با یک قاعدهٔ صریح مغایرت دارد.',
+};
+
+/**
+ * What the gate answers when it could not reach a decision.
+ *
+ * HUMAN_REVIEW rather than BLOCK, and rather than ALLOW, and the difference
+ * matters in both directions: blocking on an outage punishes people for an
+ * infrastructure fault, while allowing on one turns every outage into a way
+ * around the gate. A person looking costs a delay and nothing else.
+ */
+function failClosed(): SpaceGateResult {
+  return {
+    verdict: 'HUMAN_REVIEW',
+    reason: 'بررسی خودکار در دسترس نبود، بنابراین یک نفر این درخواست را بررسی می‌کند.',
+    policyVersionRef: 'unavailable',
+    matchedPolicyRules: [],
+    guidance: null,
+  };
+}
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('GATE_TIMEOUT')), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+  });
+}
+
+/**
+ * The decision-to-verdict mapping. One-to-one and total, because the two
+ * enums describe the same four outcomes from different sides: the guidance
+ * says what should happen to a proposal, the space pipeline records what
+ * happened to a version.
+ */
+const VERDICT_BY_DECISION: Record<CreationDecision, SpaceGateVerdict> = {
+  ALLOW: 'ALLOW',
+  REVISE: 'REVISE',
+  HUMAN_REVIEW: 'HUMAN_REVIEW',
+  BLOCK: 'BLOCK',
+};
+
+/**
+ * The real gate: deterministic policy rules for the verdict, and a model -
+ * when one is configured and reachable - for the creative half only.
+ *
+ * Every failure path lands in `failClosed`. That includes the ones that look
+ * like success: an empty baseline matches nothing, and `decide` treats a rule
+ * count of zero as an outage rather than a clean proposal, so a policy table
+ * that failed to seed cannot quietly approve everything.
+ */
+export function createSpaceCreationGate(deps: SpaceGuidanceDeps, options: SpaceCreationGateOptions = {}): SpaceCreationGate {
+  const timeoutMs = options.timeoutMs ?? GATE_TIMEOUT_MS;
+  const report = options.onFailure ?? (() => {});
+
+  return {
+    async evaluate(input) {
+      let guidance: SpaceCreationGuidance;
+      try {
+        guidance = await withTimeout(guideSpaceCreation(deps, input, null), timeoutMs);
+      } catch (error) {
+        report(error);
+        return failClosed();
+      }
+
+      return {
+        verdict: VERDICT_BY_DECISION[guidance.creationDecision],
+        reason: REASONS[guidance.creationDecision],
+        policyVersionRef: guidance.policyVersionRef,
+        matchedPolicyRules: guidance.matchedPolicyRules,
+        guidance,
+      };
+    },
+
+    async blocksOnTitle(title) {
+      try {
+        const rules = await withTimeout(deps.policy.currentRules(), timeoutMs);
+        // An unreadable baseline must not refuse a title either. Creating a
+        // draft nobody else can see is not the dangerous step; publishing is,
+        // and `evaluate` guards that one.
+        if (rules.length === 0) return false;
+        return evaluatePolicy(title, rules).matched.some((m) => m.severity === 'SEVERE');
+      } catch (error) {
+        report(error);
+        return false;
+      }
+    },
+  };
+}
+
+export { policyVersionRef };
+export type { PolicyRuleSource, SpaceGuidanceDeps };

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { SpaceGateVerdict, SpaceStatus } from '@taavon/database';
-import type { SpaceCardHint } from '@taavon/contracts';
-import { evaluateSpaceCreationGate } from './space-creation-gate';
+import type { SpaceCardHint, SpaceCreationGuidance } from '@taavon/contracts';
+import type { SpaceCreationGate } from './space-creation-gate';
 import { generateUniqueSlug } from './slug';
 
 export class SpaceNotFoundError extends Error {
@@ -39,6 +39,18 @@ export class GateNotAllowedError extends Error {
   constructor() {
     super('This space cannot be published until it passes precheck with an ALLOW verdict.');
     this.name = 'GateNotAllowedError';
+  }
+}
+
+/**
+ * The title alone matched a SEVERE rule, so nothing was created - no Space
+ * row and no slug. "BLOCK هیچ Space/slug عمومی نسازد": the cheapest way to
+ * keep that promise is to never claim the name in the first place.
+ */
+export class SpaceBlockedError extends Error {
+  constructor() {
+    super('This title matches an explicit policy rule and no space was created.');
+    this.name = 'SpaceBlockedError';
   }
 }
 
@@ -117,7 +129,17 @@ export interface SpaceRepository {
     policyVersion: number;
     createdBy: string;
   }): Promise<{ versionNumber: number }>;
-  setGateVerdict(spaceId: string, versionNumber: number, verdict: SpaceGateVerdict, reason: string, newStatus: SpaceStatus): Promise<void>;
+  /** Persists the verdict on that exact version, moves the space's status, and writes one audit event naming the baseline that decided it - all in one transaction. */
+  setGateVerdict(input: {
+    spaceId: string;
+    versionNumber: number;
+    verdict: SpaceGateVerdict;
+    reason: string;
+    newStatus: SpaceStatus;
+    actorId: string;
+    policyVersionRef: string;
+    matchedPolicyRules: string[];
+  }): Promise<void>;
   /** Sets status=PUBLISHED, publishedAt=now, and appends a `space.published` outbox event in one transaction. */
   publish(spaceId: string): Promise<{ publishedAt: Date }>;
   archive(spaceId: string): Promise<{ archivedAt: Date }>;
@@ -160,7 +182,16 @@ function assertNoDuplicateRoleKeys(roles: SpaceRoleInputRecord[]): void {
  * deliberately split this way). Any authenticated user may create a draft -
  * "ساخت draft آزاد" (Task 10's own acceptance line).
  */
-export async function createSpace(repo: SpaceRepository, creatorId: string, title: string): Promise<{ id: string; slug: string }> {
+export async function createSpace(
+  repo: SpaceRepository,
+  gate: SpaceCreationGate,
+  creatorId: string,
+  title: string
+): Promise<{ id: string; slug: string }> {
+  // Checked before the slug is generated, not after: a refusal that has
+  // already claimed the name has not actually refused anything.
+  if (await gate.blocksOnTitle(title)) throw new SpaceBlockedError();
+
   const slug = await generateUniqueSlug(title, (candidate) => repo.slugExists(candidate));
   const { id } = await repo.createDraft({ title, slug, policyVersion: 1, creatorId });
   return { id, slug };
@@ -202,20 +233,33 @@ export async function updateSpaceDefinition(
 }
 
 /**
- * Runs the (temporary, rule-based) SpaceCreationGate against the space's
- * current latest version and persists the verdict onto that exact version -
- * editing again always produces a new version with a fresh, unset verdict,
- * so a stale ALLOW can never silently carry over to changed content.
+ * Runs the SpaceCreationGate against the space's current latest version and
+ * persists the verdict onto that exact version - editing again always
+ * produces a new version with a fresh, unset verdict, so a stale ALLOW can
+ * never silently carry over to changed content.
+ *
+ * The verdict is recorded together with the baseline that produced it and
+ * the rules that matched, both on the version and in the audit trail:
+ * "منبع policyVersion در نتیجه و audit ثبت شود". Without them a stored
+ * BLOCK is an unexplainable one once the wording of a rule moves on.
  */
 export async function precheckSpace(
   repo: SpaceRepository,
+  gate: SpaceCreationGate,
   spaceId: string,
   userId: string
-): Promise<{ verdict: SpaceGateVerdict; reason: string; status: SpaceStatus }> {
+): Promise<{
+  verdict: SpaceGateVerdict;
+  reason: string;
+  status: SpaceStatus;
+  policyVersionRef: string;
+  matchedPolicyRules: string[];
+  guidance: SpaceCreationGuidance | null;
+}> {
   const space = await loadForEdit(repo, spaceId, userId);
   assertEditable(space.status);
 
-  const { verdict, reason } = evaluateSpaceCreationGate({
+  const { verdict, reason, policyVersionRef, matchedPolicyRules, guidance } = await gate.evaluate({
     title: space.latestVersion.title,
     purpose: space.latestVersion.purpose,
     participationMethods: space.latestVersion.participationMethods,
@@ -223,9 +267,18 @@ export async function precheckSpace(
   });
 
   const newStatus: SpaceStatus = verdict === 'HUMAN_REVIEW' ? 'HUMAN_REVIEW' : verdict === 'ALLOW' ? 'DRAFT' : 'PRECHECK_REQUIRED';
-  await repo.setGateVerdict(spaceId, space.latestVersion.versionNumber, verdict, reason, newStatus);
+  await repo.setGateVerdict({
+    spaceId,
+    versionNumber: space.latestVersion.versionNumber,
+    verdict,
+    reason,
+    newStatus,
+    actorId: userId,
+    policyVersionRef,
+    matchedPolicyRules,
+  });
 
-  return { verdict, reason, status: newStatus };
+  return { verdict, reason, status: newStatus, policyVersionRef, matchedPolicyRules, guidance };
 }
 
 /** "publish حداقل title، purpose، یک participation method و دو نقش اصلی متفاوت بخواهد" - re-checked here independently of the gate, which already implies these via REVISE, as defense in depth. */

@@ -1,3 +1,4 @@
+import { spaceCreationGuidanceSchema } from './ai';
 import { z } from 'zod';
 
 export const spaceStatusSchema = z.enum([
@@ -101,10 +102,22 @@ export const spaceResponseSchema = z.object({
 });
 export type SpaceResponse = z.infer<typeof spaceResponseSchema>;
 
+/**
+ * The precheck result, with the baseline that produced it.
+ *
+ * `policyVersionRef` and `matchedPolicyRules` travel with the verdict rather
+ * than being looked up later, because a BLOCK nobody can trace back to a rule
+ * and a law is a refusal without a reason. `guidance` is the creative half
+ * and is null when the gate failed closed - the verdict still stands, there
+ * is simply nothing to show alongside it.
+ */
 export const precheckSpaceResponseSchema = z.object({
   verdict: spaceGateVerdictSchema,
   reason: z.string(),
   status: spaceStatusSchema,
+  policyVersionRef: z.string(),
+  matchedPolicyRules: z.array(z.string()),
+  guidance: spaceCreationGuidanceSchema.nullable(),
 });
 export type PrecheckSpaceResponse = z.infer<typeof precheckSpaceResponseSchema>;
 

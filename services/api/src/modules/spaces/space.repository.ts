@@ -169,14 +169,29 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
       });
     },
 
-    async setGateVerdict(spaceId, versionNumber, verdict, reason, newStatus) {
-      await prisma.$transaction([
-        prisma.spaceDefinitionVersion.update({
+    async setGateVerdict(input) {
+      const { spaceId, versionNumber, verdict, reason, newStatus, actorId, policyVersionRef, matchedPolicyRules } = input;
+      await prisma.$transaction(async (tx) => {
+        await tx.spaceDefinitionVersion.update({
           where: { spaceId_versionNumber: { spaceId, versionNumber } },
           data: { gateVerdict: verdict, gateReason: reason },
-        }),
-        prisma.space.update({ where: { id: spaceId }, data: { status: newStatus } }),
-      ]);
+        });
+        await tx.space.update({ where: { id: spaceId }, data: { status: newStatus } });
+        // In the same transaction as the verdict it describes, so the trail
+        // can never disagree with the record - "منبع policyVersion در نتیجه
+        // و audit ثبت شود".
+        await tx.auditEvent.create({
+          data: {
+            actorId,
+            action: 'space.gate_verdict',
+            targetType: 'Space',
+            targetId: spaceId,
+            reason,
+            correlationId: `space-gate:${spaceId}:${versionNumber}`,
+            metadata: { verdict, versionNumber, policyVersionRef, matchedPolicyRules },
+          },
+        });
+      });
     },
 
     async publish(spaceId) {

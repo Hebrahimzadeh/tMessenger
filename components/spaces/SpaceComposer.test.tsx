@@ -10,6 +10,48 @@ function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
+/** The guidance the precheck now returns alongside its verdict. */
+function guidanceFor(decision: string, overrides: Record<string, unknown> = {}) {
+  return {
+    title: 'باغ محله',
+    purpose: 'نگهداری مشترک باغچه محله توسط داوطلبان',
+    assumptions: ['فرض شد مشارکت داوطلبانه است.'],
+    strengths: ['از یک نیاز واقعی شروع شده است.'],
+    risks: ['هنوز روشن نیست چه کسی هماهنگی را بر عهده می‌گیرد.'],
+    questions: ['چه کسی اولین قدم را برمی‌دارد؟'],
+    suggestedRevisions:
+      decision === 'REVISE'
+        ? [{ field: 'purpose', value: 'متن کامل‌تر برای هدف', reason: 'توضیح هدف را کامل‌تر بنویسید.' }]
+        : [],
+    participationRoles: [
+      { title: 'هماهنگ‌کننده', description: 'کارها را تقسیم می‌کند.', isPrimary: true },
+      { title: 'مشارکت‌کننده', description: 'در انجام کار سهم می‌گیرد.', isPrimary: true },
+    ],
+    valueChainNodes: ['شناسایی نیاز'],
+    exampleCardTemplates: [
+      { title: 'نمونه: اعلام آمادگی', body: 'من می‌توانم کمک کنم.', isExample: true, notice: 'نمونه — محتوای واقعی نیست' },
+    ],
+    suggestedToolKeys: ['coordination'],
+    creationDecision: decision,
+    matchedPolicyRules: decision === 'BLOCK' ? ['gambling@v1 — قانون مجازات اسلامی'] : [],
+    safetyLevel: decision === 'BLOCK' ? 'SEVERE' : decision === 'HUMAN_REVIEW' ? 'REVIEW' : 'NORMAL',
+    policyVersionRef: 'baseline:v1:8rules',
+    ...overrides,
+  };
+}
+
+function precheckResponse(verdict: string, reason: string, withGuidance = true) {
+  const status = verdict === 'HUMAN_REVIEW' ? 'HUMAN_REVIEW' : verdict === 'ALLOW' ? 'DRAFT' : 'PRECHECK_REQUIRED';
+  return {
+    verdict,
+    reason,
+    status,
+    policyVersionRef: withGuidance ? 'baseline:v1:8rules' : 'unavailable',
+    matchedPolicyRules: verdict === 'BLOCK' ? ['gambling@v1 — قانون مجازات اسلامی'] : [],
+    guidance: withGuidance ? guidanceFor(verdict) : null,
+  };
+}
+
 function baseSpaceResponse(overrides: Record<string, unknown> = {}) {
   return {
     id: SPACE_ID,
@@ -111,7 +153,7 @@ describe('SpaceComposer: roles step', () => {
     await getToRolesStep(user);
 
     mockFetchByUrl({
-      '/precheck': { verdict: 'ALLOW', reason: 'بستر با معیارهای پایه مطابقت دارد.', status: 'DRAFT' },
+      '/precheck': precheckResponse('ALLOW', 'بستر با معیارهای پایه مطابقت دارد.'),
       [`/spaces/${SPACE_ID}`]: baseSpaceResponse(),
     });
 
@@ -137,10 +179,14 @@ describe('SpaceComposer: review step (the four precheck outcomes)', () => {
     vi.restoreAllMocks();
   });
 
-  async function getToReviewStep(user: ReturnType<typeof userEvent.setup>, verdict: string, reason: string) {
-    const status = verdict === 'HUMAN_REVIEW' ? 'HUMAN_REVIEW' : verdict === 'ALLOW' ? 'DRAFT' : 'PRECHECK_REQUIRED';
+  async function getToReviewStep(
+    user: ReturnType<typeof userEvent.setup>,
+    verdict: string,
+    reason: string,
+    withGuidance = true
+  ) {
     mockFetchByUrl({
-      '/precheck': { verdict, reason, status },
+      '/precheck': precheckResponse(verdict, reason, withGuidance),
       [`/spaces/${SPACE_ID}`]: baseSpaceResponse(),
       '/spaces': baseSpaceResponse(),
     });
@@ -163,29 +209,94 @@ describe('SpaceComposer: review step (the four precheck outcomes)', () => {
     expect(screen.getByRole('link', { name: /مشاهدهٔ بستر/ })).toHaveAttribute('href', '/spaces/baagh-mahalle');
   });
 
-  it('REVISE: shows the specific reason and an editable path back, no publish button', async () => {
+  it('REVISE: shows what to change as an editable suggestion, no publish button', async () => {
     const user = userEvent.setup();
-    await getToReviewStep(user, 'REVISE', 'توضیح هدف را کامل‌تر بنویسید (حداقل ۲۰ نویسه).');
+    await getToReviewStep(user, 'REVISE', 'برای ادامه، چند مورد را کامل کنید.');
 
-    expect(await screen.findByText('توضیح هدف را کامل‌تر بنویسید (حداقل ۲۰ نویسه).')).toBeInTheDocument();
+    expect(await screen.findByText('توضیح هدف را کامل‌تر بنویسید.')).toBeInTheDocument();
+    expect(screen.getByLabelText('متن پیشنهادی 1')).toHaveValue('متن کامل‌تر برای هدف');
     expect(screen.queryByRole('button', { name: 'انتشار' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /ویرایش/ })).toBeInTheDocument();
   });
 
-  it('HUMAN_REVIEW: shows an understandable pause message, no publish button', async () => {
+  it('REVISE: accepting the suggestions puts them in the form, not straight into the space', async () => {
     const user = userEvent.setup();
-    await getToReviewStep(user, 'HUMAN_REVIEW', 'این محتوا نیاز به بررسی دستی دارد.');
+    await getToReviewStep(user, 'REVISE', 'برای ادامه، چند مورد را کامل کنید.');
+    await screen.findByText('توضیح هدف را کامل‌تر بنویسید.');
 
-    expect(await screen.findByText(/بررسی دستی/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'اعمال موارد انتخاب‌شده' }));
+
+    // Back in their own form, with the accepted roles in the fields - so they
+    // read them before they become their space.
+    expect(await screen.findByLabelText('نقش اصلی اول')).toHaveValue('هماهنگ‌کننده');
+    expect(screen.getByLabelText('نقش اصلی دوم')).toHaveValue('مشارکت‌کننده');
+  });
+
+  it('HUMAN_REVIEW: says a person is looking and that it is not a violation, no publish button', async () => {
+    const user = userEvent.setup();
+    await getToReviewStep(user, 'HUMAN_REVIEW', 'این درخواست را یک نفر بررسی می‌کند.');
+
+    expect(await screen.findByText(/یک نفر این درخواست را بررسی می‌کند/)).toBeInTheDocument();
+    expect(screen.getByText(/این به معنای تخلف نیست/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'انتشار' })).not.toBeInTheDocument();
   });
 
-  it('BLOCK: shows the reason and explicitly states no public page will be created, no publish button', async () => {
+  it('BLOCK: cites the rule, states no public page will be created, no publish button', async () => {
     const user = userEvent.setup();
-    await getToReviewStep(user, 'BLOCK', 'محتوای این بستر با قوانین پلتفرم مغایرت دارد.');
+    await getToReviewStep(user, 'BLOCK', 'این درخواست با یک قاعدهٔ صریح مغایرت دارد.');
 
-    expect(await screen.findByText('محتوای این بستر با قوانین پلتفرم مغایرت دارد.')).toBeInTheDocument();
+    expect(await screen.findByText('gambling@v1 — قانون مجازات اسلامی')).toBeInTheDocument();
     expect(screen.getByText(/منتشر نخواهد شد/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'انتشار' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'اعمال موارد انتخاب‌شده' })).not.toBeInTheDocument();
+  });
+
+  it('an outage: a verdict with no guidance still explains itself and offers a way back', async () => {
+    const user = userEvent.setup();
+    await getToReviewStep(
+      user,
+      'HUMAN_REVIEW',
+      'بررسی خودکار در دسترس نبود، بنابراین یک نفر این درخواست را بررسی می‌کند.',
+      false
+    );
+
+    expect(await screen.findByText(/بررسی خودکار در دسترس نبود/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'انتشار' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'بازگشت و ویرایش' })).toBeInTheDocument();
+  });
+});
+
+describe('SpaceComposer: a blocked title never becomes a space', () => {
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('shows the reason from the API and stays on the describe step', async () => {
+    global.fetch = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/spaces') && !url.includes('similar')) {
+        return Promise.resolve(
+          jsonResponse(422, {
+            error: {
+              code: 'SPACE_BLOCKED',
+              message: 'این عنوان با یکی از قواعد صریح پلتفرم مغایرت دارد. عنوان دیگری بنویسید.',
+              correlationId: 'test',
+            },
+          })
+        );
+      }
+      return Promise.resolve(jsonResponse(200, { items: [] }));
+    }) as unknown as typeof fetch;
+
+    const user = userEvent.setup();
+    render(<SpaceComposer />);
+    await user.type(screen.getByLabelText('عنوان بستر'), 'باشگاه قمار محله');
+    await user.click(screen.getByRole('button', { name: 'ادامه' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('عنوان دیگری بنویسید.');
+    // Still on the first step: nothing was created, so there is nothing to
+    // go back to.
+    expect(screen.getByLabelText('عنوان بستر')).toBeInTheDocument();
   });
 });

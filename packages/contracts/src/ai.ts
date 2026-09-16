@@ -71,6 +71,81 @@ export const spaceGuidanceOutputSchema = z.object({
   suggestions: z.array(z.string().min(1).max(300)).min(1).max(5),
 });
 
+// --- Task 24: the full space-creation guidance shape ---------------------
+
+export const creationDecisionSchema = z.enum(['ALLOW', 'REVISE', 'HUMAN_REVIEW', 'BLOCK']);
+export type CreationDecision = z.infer<typeof creationDecisionSchema>;
+
+export const safetyLevelSchema = z.enum(['NORMAL', 'REVIEW', 'SEVERE']);
+export type SafetyLevel = z.infer<typeof safetyLevelSchema>;
+
+/**
+ * A change the guidance proposes. Every one is optional for the person to take.
+ *
+ * `value` is a *draft they could accept*, never an empty prompt to fill in: a
+ * revision with nothing in it is a form field wearing a suggestion's clothes,
+ * and this task exists to avoid exactly that. The schema enforces it by
+ * refusing an empty string.
+ */
+export const suggestedRevisionSchema = z.object({
+  field: z.enum(['title', 'purpose', 'participationMethods', 'participationRoles']),
+  value: z.string().min(1).max(4000),
+  reason: z.string().min(1).max(500),
+});
+
+export const participationRoleSuggestionSchema = z.object({
+  title: z.string().min(1).max(120),
+  description: z.string().min(1).max(500),
+  isPrimary: z.boolean(),
+});
+
+/**
+ * A sample card, shown so someone can see what their space would actually
+ * hold. `isExample` is a literal `true` and `notice` is a fixed string, both
+ * fixed in the schema rather than left to a caller or a model: an example
+ * that can be mistaken for real content is worse than no example at all, and
+ * a flag anything could set to false is not a flag.
+ */
+export const EXAMPLE_CARD_NOTICE = 'نمونه — محتوای واقعی نیست';
+
+export const exampleCardTemplateSchema = z.object({
+  title: z.string().min(1).max(200),
+  body: z.string().min(1).max(2000),
+  isExample: z.literal(true),
+  notice: z.literal(EXAMPLE_CARD_NOTICE),
+});
+
+/**
+ * Everything the guidance produces about one proposed space.
+ *
+ * Two things are deliberately absent, and their absence is the design. There
+ * is no score for the person who wrote it, and no judgement of their piety or
+ * sincerity - "هیچ piety/person score". The output describes a *proposal*:
+ * what it assumes, where it is strong, what could go wrong, and what to ask.
+ * Nothing here ranks a human being.
+ */
+export const spaceCreationGuidanceSchema = z.object({
+  title: z.string().min(1).max(200),
+  purpose: z.string().min(1).max(4000),
+  /** What the guidance had to assume because the description did not say. Shown, never hidden. */
+  assumptions: z.array(z.string().min(1).max(300)).max(10),
+  strengths: z.array(z.string().min(1).max(300)).max(10),
+  risks: z.array(z.string().min(1).max(300)).max(10),
+  questions: z.array(z.string().min(1).max(300)).max(10),
+  suggestedRevisions: z.array(suggestedRevisionSchema).max(10),
+  participationRoles: z.array(participationRoleSuggestionSchema).max(8),
+  valueChainNodes: z.array(z.string().min(1).max(200)).max(12),
+  exampleCardTemplates: z.array(exampleCardTemplateSchema).max(6),
+  suggestedToolKeys: z.array(z.string().min(1).max(60)).max(10),
+  creationDecision: creationDecisionSchema,
+  /** The policy rules that actually matched. A BLOCK with an empty list is impossible by construction. */
+  matchedPolicyRules: z.array(z.string().min(1).max(120)).max(20),
+  safetyLevel: safetyLevelSchema,
+  /** Which baseline the decision came from, so a verdict stays traceable after the wording changes. */
+  policyVersionRef: z.string().min(1).max(200),
+});
+export type SpaceCreationGuidance = z.infer<typeof spaceCreationGuidanceSchema>;
+
 export const cardDraftOutputSchema = z.object({
   kind: z.literal('CARD_DRAFT'),
   title: z.string().min(1).max(200),

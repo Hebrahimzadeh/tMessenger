@@ -7,11 +7,22 @@ function startOfToday(): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
-export function createPrismaOrchestratorRepository(prisma: PrismaClient): OrchestratorRepository {
+/**
+ * Accepts the client itself or a function returning it.
+ *
+ * The lazy form exists for one specific reason: `app.db` is decorated by a
+ * plugin `server.ts` registers *after* `buildApp()` returns, so anything that
+ * reads `app.db` while wiring routes captures `undefined` and fails on the
+ * first query - which the space-creation gate then reports as an outage
+ * rather than as the wiring mistake it is.
+ */
+export function createPrismaOrchestratorRepository(db: PrismaClient | (() => PrismaClient)): OrchestratorRepository {
+  const prisma = (): PrismaClient => (typeof db === 'function' ? db() : db);
+
   return {
     conversationKind: {
       async kindOf(conversationId) {
-        const row = await prisma.conversation.findUnique({
+        const row = await prisma().conversation.findUnique({
           where: { id: conversationId },
           select: { kind: true },
         });
@@ -20,7 +31,7 @@ export function createPrismaOrchestratorRepository(prisma: PrismaClient): Orches
     },
 
     async createRequest(input) {
-      return prisma.aiRequest.create({
+      return prisma().aiRequest.create({
         data: {
           requesterId: input.requesterId,
           capability: input.capability,
@@ -34,7 +45,7 @@ export function createPrismaOrchestratorRepository(prisma: PrismaClient): Orches
     },
 
     async recordResult(input) {
-      await prisma.aiResult.create({
+      await prisma().aiResult.create({
         data: {
           requestId: input.requestId,
           outcome: input.outcome,
@@ -48,17 +59,17 @@ export function createPrismaOrchestratorRepository(prisma: PrismaClient): Orches
     },
 
     async recordUsage(requestId, usage) {
-      await prisma.providerUsage.create({ data: { requestId, ...usage } });
+      await prisma().providerUsage.create({ data: { requestId, ...usage } });
     },
 
     async countRecentRequests(requesterId, sinceSeconds) {
-      return prisma.aiRequest.count({
+      return prisma().aiRequest.count({
         where: { requesterId, createdAt: { gte: new Date(Date.now() - sinceSeconds * 1000) } },
       });
     },
 
     async spentTodayMicros() {
-      const sum = await prisma.providerUsage.aggregate({
+      const sum = await prisma().providerUsage.aggregate({
         where: { createdAt: { gte: startOfToday() } },
         _sum: { costMicros: true },
       });
@@ -68,7 +79,7 @@ export function createPrismaOrchestratorRepository(prisma: PrismaClient): Orches
     async currentPromptVersion(capability) {
       // The highest version wins. Templates are immutable, so "current" is
       // simply the newest one anyone has added.
-      const row = await prisma.promptVersion.findFirst({
+      const row = await prisma().promptVersion.findFirst({
         where: { capability },
         orderBy: { version: 'desc' },
         select: { id: true, template: true },
