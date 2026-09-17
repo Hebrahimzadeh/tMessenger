@@ -112,7 +112,7 @@ async function main() {
         // No key means no provider, and no provider means every capability
         // answers from its fallback. Running without AI is a supported
         // configuration, not a degraded one.
-        provider: env.GEMINI_API_KEY ? new GeminiProvider(env.GEMINI_API_KEY, env.GEMINI_MODEL) : null,
+        provider: env.GEMINI_API_KEY ? new GeminiProvider(env.GEMINI_API_KEY, env.GEMINI_MODEL, env.GEMINI_BASE_URL) : null,
         repository: createPrismaOrchestratorRepository(getPrisma()),
         dailyBudgetMicros: env.AI_DAILY_BUDGET_MICROS ?? null,
       }),

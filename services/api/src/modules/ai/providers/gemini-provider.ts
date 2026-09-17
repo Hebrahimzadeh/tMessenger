@@ -1,6 +1,21 @@
 import { ProviderTimeoutError, ProviderUnavailableError, type AiProvider, type ProviderInput, type ProviderResult } from './ai-provider';
 
-const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
+/**
+ * Google's own endpoint, and the default.
+ *
+ * Overridable because reaching it is not a given. Verified on 2026-09-18 from
+ * the production host: Google answers `400 FAILED_PRECONDITION - User location
+ * is not supported for the API use`, and it is not the key or the DNS
+ * unblocker at fault. The unblocker works - the hostname resolves to its
+ * German relay and the TLS certificate that comes back is genuinely Google's -
+ * but Google refuses that relay's addresses for this API. Swapping keys does
+ * nothing; the request never gets far enough for the key to matter.
+ *
+ * `GEMINI_BASE_URL` lets a deployment point at any gateway that speaks the
+ * same `{model}:generateContent?key=` shape, so a working path can be
+ * configured without a release.
+ */
+export const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 /**
  * Checked against the live API on 2026-09-17: `gemini-2.0-flash`, which this
@@ -56,7 +71,8 @@ export class GeminiProvider implements AiProvider {
    */
   constructor(
     private readonly apiKey: string,
-    private readonly model = DEFAULT_GEMINI_MODEL
+    private readonly model = DEFAULT_GEMINI_MODEL,
+    private readonly baseUrl = DEFAULT_GEMINI_BASE_URL
   ) {}
 
   async generate(input: ProviderInput): Promise<ProviderResult> {
@@ -65,7 +81,7 @@ export class GeminiProvider implements AiProvider {
 
     let response: Response;
     try {
-      response = await fetch(`${ENDPOINT}/${this.model}:generateContent?key=${this.apiKey}`, {
+      response = await fetch(`${this.baseUrl}/${this.model}:generateContent?key=${this.apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,

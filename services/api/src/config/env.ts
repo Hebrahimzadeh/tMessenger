@@ -78,6 +78,8 @@ const baseSchema = z.object({
   GEMINI_API_KEY: optionalEnv(z.string().min(1)),
   /** Overrides the provider's default model, for when Google retires one. */
   GEMINI_MODEL: optionalEnv(z.string().min(1)),
+  /** Overrides where the model is called, for a deployment that cannot reach Google directly. */
+  GEMINI_BASE_URL: optionalEnv(z.string().url()),
   AI_DAILY_BUDGET_MICROS: optionalEnv(z.coerce.number().int().nonnegative()),
 });
 
