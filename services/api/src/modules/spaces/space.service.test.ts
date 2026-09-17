@@ -996,7 +996,7 @@ describe('editSpace after publication', () => {
   });
 
   it.each([
-    ['a purpose too short to read', { purpose: 'کوتاه' }, 'معرفی بستر'],
+    ['a purpose too short to read', { purpose: 'کوتاه' }, 'معرفی بستر باید دست‌کم ۲۰ نویسه باشد.'],
     ['no participation method', { participationMethods: [] }, 'روش مشارکت'],
   ])('names the field when %s', async (_label, change, expected) => {
     const { repo, id, edit } = await publishedSpace();

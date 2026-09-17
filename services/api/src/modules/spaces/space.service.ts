@@ -499,7 +499,8 @@ export async function editSpace(
   // person is looking at the form and needs to know which field.
   const primaryCount = input.roles.filter((role) => role.isPrimary).length;
   if (input.purpose.trim().length < MIN_PUBLISHED_PURPOSE_LENGTH) {
-    throw new SpaceEditRefusedError('REVISE', `معرفی بستر باید دست‌کم ${MIN_PUBLISHED_PURPOSE_LENGTH} نویسه باشد.`, []);
+    // Persian digits, like every other number the interface shows.
+    throw new SpaceEditRefusedError('REVISE', 'معرفی بستر باید دست‌کم ۲۰ نویسه باشد.', []);
   }
   if (input.participationMethods.length < 1) {
     throw new SpaceEditRefusedError('REVISE', 'دست‌کم یک روش مشارکت لازم است.', []);
