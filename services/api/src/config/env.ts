@@ -62,6 +62,8 @@ const baseSchema = z.object({
   // provider and every capability answers from its rule-based fallback,
   // which is a supported way to run rather than a broken one.
   GEMINI_API_KEY: z.string().min(1).optional(),
+  /** Overrides the provider's default model, for when Google retires one. */
+  GEMINI_MODEL: z.string().min(1).optional(),
   AI_DAILY_BUDGET_MICROS: z.coerce.number().int().nonnegative().optional(),
 });
 

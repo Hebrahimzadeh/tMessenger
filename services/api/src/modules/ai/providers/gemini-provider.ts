@@ -3,6 +3,13 @@ import { ProviderTimeoutError, ProviderUnavailableError, type AiProvider, type P
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 /**
+ * Checked against the live API on 2026-09-17: `gemini-2.0-flash`, which this
+ * shipped with, now answers 404 with "no longer available ... use
+ * models/gemini-3.6-flash".
+ */
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
+
+/**
  * Rough token accounting. The API does return usage metadata, but it is
  * absent often enough (errors, partial responses) that the budget cannot
  * depend on it. Four characters per token is the usual English
@@ -40,9 +47,16 @@ interface GeminiResponse {
 export class GeminiProvider implements AiProvider {
   readonly name = 'gemini';
 
+  /**
+   * The model is a parameter with a default rather than a constant, and the
+   * default is worth keeping current: Google retires these on a schedule and
+   * a retired one answers 404, which the orchestrator can only report as a
+   * provider failure. `GEMINI_MODEL` lets a deployment move to the successor
+   * the moment it is named, without waiting for a release.
+   */
   constructor(
     private readonly apiKey: string,
-    private readonly model = 'gemini-2.0-flash'
+    private readonly model = DEFAULT_GEMINI_MODEL
   ) {}
 
   async generate(input: ProviderInput): Promise<ProviderResult> {
