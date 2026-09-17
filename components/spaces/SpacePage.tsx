@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   createSpaceInviteResponseSchema,
   spaceResponseSchema,
@@ -43,14 +43,14 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
   const [searchResults, setSearchResults] = useState<SpaceSearchItem[] | null>(null);
   const [editing, setEditing] = useState(false);
   /** Set once, right after a space is built from a prompt and the person lands here. */
-  // Read once from the URL the composer redirected to. Safe to compute during
-  // the first render: nothing depending on it is shown until the space has
-  // loaded, so server and client markup agree.
+  // From the router, not from `window.location`: on a client navigation the
+  // address bar is updated after the new route renders, so reading it during
+  // render showed the *previous* URL and the notice never appeared. Frozen in
+  // state on mount so stripping the query below cannot make it vanish.
+  const searchParams = useSearchParams();
   const [builtNotice] = useState<{ outcome: 'published' | 'review'; aiWrote: boolean } | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const params = new URLSearchParams(window.location.search);
-    const built = params.get('built');
-    return built === 'published' || built === 'review' ? { outcome: built, aiWrote: params.get('ai') === '1' } : null;
+    const built = searchParams.get('built');
+    return built === 'published' || built === 'review' ? { outcome: built, aiWrote: searchParams.get('ai') === '1' } : null;
   });
 
   useEffect(() => {

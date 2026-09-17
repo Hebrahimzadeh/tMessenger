@@ -3,7 +3,14 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SpacePage } from './SpacePage';
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  // Empty by default; the built-notice tests pass their own.
+  useSearchParams: () => new URLSearchParams(searchParams),
+}));
+
+/** Reassigned per test to drive `useSearchParams`. */
+let searchParams = '';
 
 const originalFetch = global.fetch;
 const SPACE_ID = '11111111-1111-4111-8111-111111111111';
@@ -59,6 +66,61 @@ function mockFetchByUrl(handlers: Record<string, unknown>) {
 
 const EMPTY_CARDS_PAGE = { items: [], nextCursor: null };
 const EMPTY_PINS = { items: [], limit: 5 };
+
+describe('SpacePage: the notice after a space is built', () => {
+  afterEach(() => {
+    searchParams = '';
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function renderBuilt(query: string, canManage = true) {
+    searchParams = query;
+    mockFetchByUrl({
+      [`/spaces/${SPACE_ID}`]: fullSpace({ canManage }),
+      '/cards': EMPTY_CARDS_PAGE,
+      '/pins': EMPTY_PINS,
+    });
+    render(<SpacePage idOrSlug={SPACE_ID} />);
+  }
+
+  it('welcomes a person to the space they just built', async () => {
+    // Read from the router, not from window.location: on a client navigation
+    // the address bar updates after the new route renders, so reading it
+    // during render showed the previous URL and this never appeared.
+    renderBuilt('built=published&ai=1');
+    expect(await screen.findByText(/ساخته و منتشر شد/)).toBeInTheDocument();
+    expect(screen.getByText(/شما مدیر این بستر هستید/)).toBeInTheDocument();
+  });
+
+  it('says plainly when rules built it rather than a model', async () => {
+    renderBuilt('built=published&ai=0');
+    expect(await screen.findByText(/بدون دستیار هوش مصنوعی/)).toBeInTheDocument();
+  });
+
+  it('explains a space that is waiting for a person, without calling it a refusal', async () => {
+    renderBuilt('built=review&ai=1');
+    expect(await screen.findByText(/پس از نگاه یک نفر منتشر می‌شود/)).toBeInTheDocument();
+    expect(screen.getByText(/چیزی رد نشده است/)).toBeInTheDocument();
+  });
+
+  it('shows nothing on an ordinary visit', async () => {
+    renderBuilt('');
+    await screen.findByRole('heading', { name: 'باغ محله' });
+    expect(screen.queryByText(/ساخته و منتشر شد/)).not.toBeInTheDocument();
+  });
+
+  it('offers editing to the manager and to nobody else', async () => {
+    renderBuilt('', true);
+    expect(await screen.findByRole('button', { name: 'ویرایش بستر' })).toBeInTheDocument();
+  });
+
+  it('does not offer editing to a visitor', async () => {
+    renderBuilt('', false);
+    await screen.findByRole('heading', { name: 'باغ محله' });
+    expect(screen.queryByRole('button', { name: 'ویرایش بستر' })).not.toBeInTheDocument();
+  });
+});
 
 describe('SpacePage', () => {
   afterEach(() => {
