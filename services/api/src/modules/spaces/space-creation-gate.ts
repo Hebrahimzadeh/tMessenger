@@ -1,6 +1,6 @@
 import type { SpaceGateVerdict } from '@taavon/database';
 import type { CreationDecision, SpaceCreationGuidance } from '@taavon/contracts';
-import { guideSpaceCreation, type SpaceGuidanceDeps } from '../ai/capabilities/space-guidance';
+import { decide, guideSpaceCreation, type SpaceGuidanceDeps } from '../ai/capabilities/space-guidance';
 import { evaluatePolicy, policyVersionRef, type PolicyRuleSource } from '../ai/capabilities/policy-rules';
 
 export interface SpaceGateDefinitionInput {
@@ -26,8 +26,29 @@ export interface SpaceGateResult {
  * on this shape, not on the guidance module, so a future provider change is
  * one adapter rather than a rewrite of the space pipeline.
  */
+/** A definition checked by rules alone, as an edit to a published space is. */
+export interface SpaceGateCheckInput extends SpaceGateDefinitionInput {
+  /** Everything else a visitor will read (audience, roles, sample cards), checked against the rules too. */
+  publicText?: string;
+  /**
+   * The text whose ambiguity signals count. Defaults to all of it.
+   *
+   * An edit passes only what the person actually changed: a published
+   * description the model wrote may mention "respectful disagreement", and
+   * holding back a title fix because of wording nobody touched would make a
+   * space uneditable for doing its job.
+   */
+  ambiguityText?: string;
+}
+
 export interface SpaceCreationGate {
   evaluate(input: SpaceGateDefinitionInput): Promise<SpaceGateResult>;
+  /**
+   * The verdict from the policy baseline alone - no model is asked anything.
+   * Same fail-closed behaviour as `evaluate`: an unreadable, empty or hanging
+   * baseline is HUMAN_REVIEW, never ALLOW.
+   */
+  check(input: SpaceGateCheckInput): Promise<SpaceGateResult>;
   /**
    * The cheap check made before a slug is claimed, against nothing but a
    * title. Answers only "does this obviously violate a SEVERE rule", because
@@ -136,6 +157,30 @@ export function createSpaceCreationGate(deps: SpaceGuidanceDeps, options: SpaceC
         policyVersionRef: guidance.policyVersionRef,
         matchedPolicyRules: guidance.matchedPolicyRules,
         guidance,
+      };
+    },
+
+    async check(input) {
+      let rules;
+      try {
+        rules = await withTimeout(deps.policy.currentRules(), timeoutMs);
+      } catch (error) {
+        report(error);
+        return failClosed();
+      }
+
+      const fullText = [input.title, input.purpose, ...input.participationMethods, input.publicText ?? ''].join('\n');
+      const evaluation = evaluatePolicy(fullText, rules);
+      const ambiguitySignals =
+        input.ambiguityText === undefined ? evaluation.ambiguitySignals : evaluatePolicy(input.ambiguityText, rules).ambiguitySignals;
+
+      const decision = decide({ ...evaluation, ambiguitySignals }, input);
+      return {
+        verdict: VERDICT_BY_DECISION[decision],
+        reason: REASONS[decision],
+        policyVersionRef: rules.length > 0 ? policyVersionRef(rules) : 'unavailable',
+        matchedPolicyRules: evaluation.matched.map((m) => `${m.key}@v${m.version} — ${m.source}`),
+        guidance: null,
       };
     },
 

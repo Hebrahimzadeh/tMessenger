@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { SpaceStatus } from '@taavon/database';
 import {
   archiveSpace,
+  buildSpaceFromPrompt,
   createSpace,
   createSpaceInvite,
   DuplicateRoleKeyError,
+  editSpace,
   GateNotAllowedError,
   getSpace,
   InviteNotFoundError,
@@ -18,6 +20,7 @@ import {
   revokeSpaceInvite,
   RoleNotFoundError,
   SpaceBlockedError,
+  SpaceEditRefusedError,
   SpaceNotEditableError,
   SpaceNotFoundError,
   updateSpaceDefinition,
@@ -26,7 +29,17 @@ import {
   type SpaceRoleRecord,
   type SpaceVersionRecord,
 } from './space.service';
-import { brokenPolicySource, emptyPolicySource, fixtureGate } from '../ai/capabilities/policy.fixtures';
+import {
+  brokenPolicySource,
+  emptyPolicySource,
+  fixtureGate,
+  fixturePolicySource,
+  noopOrchestratorRepository,
+} from '../ai/capabilities/policy.fixtures';
+import { AiOrchestrator } from '../ai/orchestrator';
+import { FakeAiProvider } from '../ai/providers/fake-provider';
+import { buildSpace } from '../ai/capabilities/space-builder';
+import type { PolicyRuleSource } from '../ai/capabilities/policy-rules';
 
 /**
  * The gate every test here uses: the real one, over the seeded baseline,
@@ -51,6 +64,8 @@ function fakeSpaceRepo() {
   const spaceAdmins = new Set<string>(); // `${userId}:${spaceId}`
   const roleMemberships = new Set<string>(); // `${userId}:${roleId}`
   const invites = new Map<string, { spaceId: string; revokedAt: Date | null }>();
+  /** Everything `createBuiltSpace` was told, so a test can assert what a built space carries. */
+  const builtAudit: Parameters<SpaceRepository['createBuiltSpace']>[0][] = [];
   /** Everything `setGateVerdict` was told, so a test can assert what the audit trail would carry. */
   const gateAudit: {
     spaceId: string;
@@ -153,6 +168,73 @@ function fakeSpaceRepo() {
       return { versionNumber };
     },
 
+    async createBuiltSpace(input) {
+      const id = newId('space');
+      spaces.set(id, {
+        id,
+        slug: input.slug,
+        status: input.status,
+        creatorId: input.creatorId,
+        publishedAt: input.status === 'PUBLISHED' ? new Date('2026-09-17T12:00:00Z') : null,
+        archivedAt: null,
+      });
+      const roleRecords: SpaceRoleRecord[] = input.roles.map((role) => ({
+        id: newId('role'),
+        key: role.key,
+        title: role.title,
+        description: role.description ?? null,
+        isPrimary: role.isPrimary,
+      }));
+      rolesBySpace.set(id, roleRecords);
+      versionsBySpace.set(id, [
+        {
+          versionNumber: 1,
+          title: input.title,
+          purpose: input.purpose,
+          audience: input.audience ?? null,
+          participationMethods: input.participationMethods,
+          cardHints: input.cardHints,
+          policyVersion: input.policyVersion,
+          gateVerdict: input.verdict,
+          gateReason: input.reason,
+          primaryRoleIds: roleRecords.filter((r) => r.isPrimary).map((r) => r.id),
+          supplementaryRoleIds: roleRecords.filter((r) => !r.isPrimary).map((r) => r.id),
+        },
+      ]);
+      builtAudit.push(input);
+      return { id };
+    },
+
+    async publishNewVersion({ spaceId, roles, createdBy: _createdBy, gateReason, policyVersionRef: _ref, matchedPolicyRules: _rules, ...rest }) {
+      const byKey = new Map((rolesBySpace.get(spaceId) ?? []).map((r) => [r.key, r]));
+      for (const input of roles) {
+        const existing = byKey.get(input.key);
+        byKey.set(input.key, {
+          id: existing?.id ?? newId('role'),
+          key: input.key,
+          title: input.title,
+          description: input.description ?? null,
+          isPrimary: input.isPrimary,
+        });
+      }
+      rolesBySpace.set(spaceId, [...byKey.values()]);
+      const versions = versionsBySpace.get(spaceId) ?? [];
+      const versionNumber = versions.length + 1;
+      versions.push({
+        ...rest,
+        audience: rest.audience ?? null,
+        cardHints: rest.cardHints ?? null,
+        versionNumber,
+        gateVerdict: 'ALLOW',
+        gateReason,
+        primaryRoleIds: roles.filter((r) => r.isPrimary).map((r) => byKey.get(r.key)!.id),
+        supplementaryRoleIds: roles.filter((r) => !r.isPrimary).map((r) => byKey.get(r.key)!.id),
+      });
+      versionsBySpace.set(spaceId, versions);
+      // Status deliberately untouched, as in the real repository.
+      return { versionNumber };
+    },
+
     async setGateVerdict({ spaceId, versionNumber, verdict, reason, newStatus, policyVersionRef, matchedPolicyRules, actorId }) {
       const versions = versionsBySpace.get(spaceId)!;
       const version = versions.find((v) => v.versionNumber === versionNumber)!;
@@ -208,7 +290,7 @@ function fakeSpaceRepo() {
     },
   };
 
-  return { repo, spaceAdmins, gateAudit, spaceCount: () => spaces.size, isRoleMember: (userId: string, roleId: string) => roleMemberships.has(`${userId}:${roleId}`) };
+  return { repo, spaceAdmins, gateAudit, builtAudit, spaceCount: () => spaces.size, isRoleMember: (userId: string, roleId: string) => roleMemberships.has(`${userId}:${roleId}`) };
 }
 
 const TWO_PRIMARY_ROLES: SpaceRoleInputRecord[] = [
@@ -330,7 +412,7 @@ describe('updateSpaceDefinition', () => {
     ).rejects.toThrow(SpaceNotFoundError);
   });
 
-  it('rejects editing an already-PUBLISHED space', async () => {
+  it('keeps the draft-only edit function away from a PUBLISHED space - editSpace is the published path', async () => {
     const { repo } = fakeSpaceRepo();
     const id = await createAndFillValidDraft(repo, 'user-1');
     await precheckSpace(repo, gate, id, 'user-1');
@@ -717,5 +799,252 @@ describe('space invites', () => {
   it('resolving an unknown token throws InviteNotFoundError', async () => {
     const { repo } = fakeSpaceRepo();
     await expect(resolveSpaceInvite(repo, 'not-a-real-token')).rejects.toThrow(InviteNotFoundError);
+  });
+});
+
+
+// --- One prompt, a whole space (owner decision 2026-09-17) ---------------
+
+function builderWith(provider: FakeAiProvider | null = null, policy: PolicyRuleSource = fixturePolicySource) {
+  const orchestrator = new AiOrchestrator({ provider, repository: noopOrchestratorRepository(), dailyBudgetMicros: null });
+  return { build: (prompt: string, requesterId: string | null) => buildSpace({ orchestrator, policy }, prompt, requesterId) };
+}
+
+const CREATOR = '44444444-4444-4444-8444-444444444444';
+
+describe('buildSpaceFromPrompt', () => {
+  it('turns one prompt into a published space the person manages', async () => {
+    const { repo } = fakeSpaceRepo();
+
+    const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'یه کار خوب برای محله');
+
+    expect(result.outcome).toBe('PUBLISHED');
+    const space = await getSpace(repo, result.space!.id, CREATOR);
+    expect(space.status).toBe('PUBLISHED');
+    // "مدیریت اون بستر هم میشه خودش".
+    expect(space.creatorId).toBe(CREATOR);
+    expect(space.canManage).toBe(true);
+    // And anyone can see it, with no second step.
+    await expect(getSpace(repo, result.space!.id, null)).resolves.toMatchObject({ status: 'PUBLISHED' });
+  });
+
+  it('stores text about the space, not the prompt', async () => {
+    const { repo } = fakeSpaceRepo();
+    const prompt = 'من یه نردبون دارم می‌خوام قرض بدم';
+
+    const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, prompt);
+    const space = await getSpace(repo, result.space!.id, null);
+
+    expect(space.definition.purpose).not.toContain(prompt);
+    expect(space.definition.purpose).toMatch(/بستری است برای/);
+  });
+
+  it('stores exactly two primary roles with server-assigned keys', async () => {
+    const { repo } = fakeSpaceRepo();
+    const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'آموزش خیاطی به خانم‌های محله');
+    const space = await getSpace(repo, result.space!.id, null);
+
+    expect(space.definition.roles.filter((r) => r.isPrimary)).toHaveLength(2);
+    for (const role of space.definition.roles) expect(role.key).toMatch(/^(primary|supporting)-\d$/);
+  });
+
+  it('marks every sample card as an example', async () => {
+    const { repo } = fakeSpaceRepo();
+    const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'امانت ابزار محله');
+    const space = await getSpace(repo, result.space!.id, null);
+
+    expect(space.definition.cardHints?.length).toBeGreaterThan(0);
+    for (const hint of space.definition.cardHints ?? []) {
+      expect(hint).toMatchObject({ isExample: true, label: 'نمونه' });
+    }
+  });
+
+  it('records the document, the baseline and whether a model wrote it', async () => {
+    const { repo, builtAudit } = fakeSpaceRepo();
+    await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'امانت ابزار محله');
+
+    expect(builtAudit[0]).toMatchObject({
+      verdict: 'ALLOW',
+      policyVersionRef: 'baseline:v1:8rules',
+      creativityApplied: false,
+    });
+    expect(builtAudit[0]!.documentRef).toMatch(/^space-builder:v1:/);
+  });
+
+  it('creates nothing at all for an explicitly forbidden prompt', async () => {
+    const { repo, spaceCount } = fakeSpaceRepo();
+
+    const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'بستری برای شرط‌بندی روی مسابقه‌های محله');
+
+    expect(result.outcome).toBe('BLOCKED');
+    expect(result.space).toBeNull();
+    expect(result.matchedPolicyRules[0]).toContain('gambling@v1');
+    // No row, so no slug either.
+    expect(spaceCount()).toBe(0);
+  });
+
+  it('creates a space held for a person, visible to its manager and nobody else', async () => {
+    const { repo } = fakeSpaceRepo();
+
+    const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'صندوق محله با سود تضمینی ماهانه');
+
+    expect(result.outcome).toBe('HUMAN_REVIEW');
+    await expect(getSpace(repo, result.space!.id, CREATOR)).resolves.toMatchObject({ status: 'HUMAN_REVIEW' });
+    await expect(getSpace(repo, result.space!.id, null)).rejects.toThrow(SpaceNotFoundError);
+  });
+
+  it('never publishes when the policy baseline is down', async () => {
+    const { repo } = fakeSpaceRepo();
+    const result = await buildSpaceFromPrompt(repo, builderWith(null, brokenPolicySource), CREATOR, 'امانت ابزار محله');
+
+    expect(result.outcome).toBe('HUMAN_REVIEW');
+    await expect(getSpace(repo, result.space!.id, null)).rejects.toThrow(SpaceNotFoundError);
+  });
+
+  it('uses what the model designed when it answers', async () => {
+    const { repo } = fakeSpaceRepo();
+    const designed = {
+      kind: 'SPACE_BUILD',
+      title: 'امانت وسایل محله',
+      description: 'این بستر جایی است برای امانت‌دادن و امانت‌گرفتن وسایلی که در خانه کم استفاده می‌شوند، میان همسایه‌ها.',
+      audience: 'همسایه‌ها',
+      participationMethods: ['ثبت کارت وسیلهٔ قابل امانت'],
+      roles: [
+        { title: 'دارندهٔ وسیله', description: 'امانت می‌دهد.', isPrimary: true },
+        { title: 'نیازمند وسیله', description: 'امانت می‌گیرد.', isPrimary: true },
+      ],
+      cardHints: [],
+      reviewNote: '',
+    };
+    const provider = new FakeAiProvider([{ kind: 'ok', text: JSON.stringify(designed) }]);
+
+    const result = await buildSpaceFromPrompt(repo, builderWith(provider), CREATOR, 'من یه نردبون دارم می‌خوام قرض بدم');
+    const space = await getSpace(repo, result.space!.id, null);
+
+    expect(result.creativityApplied).toBe(true);
+    expect(space.definition.title).toBe('امانت وسایل محله');
+    expect(space.definition.purpose).toBe(designed.description);
+  });
+
+  it('gives two spaces built from the same prompt different slugs', async () => {
+    const { repo } = fakeSpaceRepo();
+    const a = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'امانت ابزار محله');
+    const b = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'امانت ابزار محله');
+    expect(a.space!.slug).not.toBe(b.space!.slug);
+  });
+});
+
+describe('editSpace after publication', () => {
+  async function publishedSpace() {
+    const store = fakeSpaceRepo();
+    const result = await buildSpaceFromPrompt(store.repo, builderWith(), CREATOR, 'امانت ابزار محله');
+    const space = await getSpace(store.repo, result.space!.id, CREATOR);
+    const edit = {
+      title: space.definition.title,
+      purpose: space.definition.purpose,
+      audience: space.definition.audience ?? undefined,
+      participationMethods: space.definition.participationMethods,
+      cardHints: space.definition.cardHints ?? undefined,
+      roles: space.definition.roles.map((r) => ({
+        key: r.key,
+        title: r.title,
+        ...(r.description ? { description: r.description } : {}),
+        isPrimary: r.isPrimary,
+      })),
+      policyVersion: 1,
+    };
+    return { ...store, id: space.id, edit };
+  }
+
+  it('applies an ordinary edit and the space stays published', async () => {
+    const { repo, id, edit } = await publishedSpace();
+
+    await editSpace(repo, gate, id, CREATOR, { ...edit, title: 'امانت ابزار کوچه‌ی ما' });
+
+    const after = await getSpace(repo, id, null);
+    expect(after.status).toBe('PUBLISHED');
+    expect(after.definition.title).toBe('امانت ابزار کوچه‌ی ما');
+  });
+
+  it('lets only the manager edit', async () => {
+    const { repo, id, edit } = await publishedSpace();
+    await expect(editSpace(repo, gate, id, 'stranger', { ...edit, title: 'عنوان دیگر' })).rejects.toThrow(NotSpaceEditorError);
+  });
+
+  it('refuses an edit that matches an explicit rule, leaving the published version untouched', async () => {
+    const { repo, id, edit } = await publishedSpace();
+    const before = await getSpace(repo, id, null);
+
+    const attempt = editSpace(repo, gate, id, CREATOR, { ...edit, purpose: `${edit.purpose} برگزاری شرط‌بندی هم داریم.` });
+
+    await expect(attempt).rejects.toThrow(SpaceEditRefusedError);
+    await attempt.catch((err: SpaceEditRefusedError) => {
+      expect(err.verdict).toBe('BLOCK');
+      expect(err.matchedPolicyRules[0]).toContain('gambling@v1');
+    });
+    const after = await getSpace(repo, id, null);
+    expect(after.definition.purpose).toBe(before.definition.purpose);
+    expect(after.status).toBe('PUBLISHED');
+  });
+
+  it('refuses an edit that needs a person, without unpublishing anything', async () => {
+    const { repo, id, edit } = await publishedSpace();
+    const attempt = editSpace(repo, gate, id, CREATOR, { ...edit, purpose: `${edit.purpose} با سود تضمینی.` });
+
+    await expect(attempt).rejects.toMatchObject({ verdict: 'HUMAN_REVIEW' });
+    expect((await getSpace(repo, id, null)).status).toBe('PUBLISHED');
+  });
+
+  it.each([
+    ['a purpose too short to read', { purpose: 'کوتاه' }, 'معرفی بستر'],
+    ['no participation method', { participationMethods: [] }, 'روش مشارکت'],
+  ])('names the field when %s', async (_label, change, expected) => {
+    const { repo, id, edit } = await publishedSpace();
+    await expect(editSpace(repo, gate, id, CREATOR, { ...edit, ...change })).rejects.toThrow(expected);
+  });
+
+  it('names the field when the roles no longer have two primaries', async () => {
+    const { repo, id, edit } = await publishedSpace();
+    const roles = edit.roles.map((r) => ({ ...r, isPrimary: false }));
+    await expect(editSpace(repo, gate, id, CREATOR, { ...edit, roles })).rejects.toThrow('دو نقش اصلی');
+  });
+
+  it('does not refuse a title fix over wording nobody touched', async () => {
+    // A published description may legitimately mention disagreement - the
+    // model describes respectful rules - and that must not make the space
+    // uneditable.
+    const { repo, id, edit } = await publishedSpace();
+    await editSpace(repo, gate, id, CREATOR, {
+      ...edit,
+      purpose: `${edit.purpose} هر اختلاف نظر با احترام زیر کارت مطرح می‌شود.`,
+    }).catch(() => undefined);
+
+    // Whatever that first edit did, a later change to the title alone is judged on the title.
+    const current = await getSpace(repo, id, CREATOR);
+    await expect(
+      editSpace(repo, gate, id, CREATOR, { ...edit, purpose: current.definition.purpose, title: 'امانت ابزار محلهٔ ما' })
+    ).resolves.toBeTruthy();
+  });
+
+  it('refuses rather than publishes when the baseline is down', async () => {
+    const { repo, id, edit } = await publishedSpace();
+    await expect(
+      editSpace(repo, fixtureGate(brokenPolicySource), id, CREATOR, { ...edit, title: 'عنوان تازه' })
+    ).rejects.toMatchObject({ verdict: 'HUMAN_REVIEW' });
+    expect((await getSpace(repo, id, null)).definition.title).toBe(edit.title);
+  });
+
+  it('still uses the draft path for a space that is not published', async () => {
+    const { repo } = fakeSpaceRepo();
+    const id = await createAndFillValidDraft(repo, 'user-1');
+    await expect(
+      editSpace(repo, gate, id, 'user-1', {
+        title: 'باغ محله',
+        purpose: VALID_PURPOSE,
+        participationMethods: ['حضوری'],
+        roles: TWO_PRIMARY_ROLES,
+        policyVersion: 1,
+      })
+    ).resolves.toMatchObject({ versionNumber: 3 });
   });
 });

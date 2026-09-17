@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { SpaceGateVerdict, SpaceStatus } from '@taavon/database';
 import type { SpaceCardHint, SpaceCreationGuidance } from '@taavon/contracts';
 import type { SpaceCreationGate } from './space-creation-gate';
+import type { SpaceBuildResult } from '../ai/capabilities/space-builder';
 import { generateUniqueSlug } from './slug';
 
 export class SpaceNotFoundError extends Error {
@@ -51,6 +52,21 @@ export class SpaceBlockedError extends Error {
   constructor() {
     super('This title matches an explicit policy rule and no space was created.');
     this.name = 'SpaceBlockedError';
+  }
+}
+
+/**
+ * An edit to a published space that was not applied. The published version is
+ * untouched: a refused edit changes nothing anybody can see.
+ */
+export class SpaceEditRefusedError extends Error {
+  constructor(
+    readonly verdict: SpaceGateVerdict,
+    readonly reason: string,
+    readonly matchedPolicyRules: string[]
+  ) {
+    super(reason);
+    this.name = 'SpaceEditRefusedError';
   }
 }
 
@@ -130,6 +146,50 @@ export interface SpaceRepository {
     createdBy: string;
   }): Promise<{ versionNumber: number }>;
   /** Persists the verdict on that exact version, moves the space's status, and writes one audit event naming the baseline that decided it - all in one transaction. */
+  /**
+   * Creates a whole space from a built definition - the Space row, version 1
+   * with its verdict, its roles, its outbox events and one audit event - in a
+   * single transaction. There is no half-built state: either the person has a
+   * space or they do not.
+   */
+  createBuiltSpace(input: {
+    slug: string;
+    creatorId: string;
+    title: string;
+    purpose: string;
+    audience?: string;
+    participationMethods: string[];
+    cardHints: SpaceCardHint[];
+    roles: SpaceRoleInputRecord[];
+    policyVersion: number;
+    status: 'PUBLISHED' | 'HUMAN_REVIEW';
+    verdict: 'ALLOW' | 'HUMAN_REVIEW';
+    reason: string;
+    policyVersionRef: string;
+    matchedPolicyRules: string[];
+    documentRef: string;
+    creativityApplied: boolean;
+  }): Promise<{ id: string }>;
+  /**
+   * Adds a version to a space that stays PUBLISHED, with its ALLOW verdict and
+   * an audit event naming the baseline that allowed it, in one transaction.
+   * Unlike `createNewVersion` it does not reset the status - a published
+   * space being corrected is not a draft.
+   */
+  publishNewVersion(input: {
+    spaceId: string;
+    title: string;
+    purpose: string;
+    audience?: string;
+    participationMethods: string[];
+    cardHints?: SpaceCardHint[];
+    roles: SpaceRoleInputRecord[];
+    policyVersion: number;
+    createdBy: string;
+    gateReason: string;
+    policyVersionRef: string;
+    matchedPolicyRules: string[];
+  }): Promise<{ versionNumber: number }>;
   setGateVerdict(input: {
     spaceId: string;
     versionNumber: number;
@@ -279,6 +339,210 @@ export async function precheckSpace(
   });
 
   return { verdict, reason, status: newStatus, policyVersionRef, matchedPolicyRules, guidance };
+}
+
+// --- One prompt, a whole space (owner decision 2026-09-17) ---------------
+
+/** The builder, as the space module sees it: a prompt in, a decided space out. */
+export interface SpaceBuilder {
+  build(prompt: string, requesterId: string | null): Promise<SpaceBuildResult>;
+}
+
+export interface BuildSpaceOutcome {
+  outcome: 'PUBLISHED' | 'HUMAN_REVIEW' | 'BLOCKED';
+  space: { id: string; slug: string } | null;
+  reason: string;
+  matchedPolicyRules: string[];
+  policyVersionRef: string;
+  creativityApplied: boolean;
+}
+
+/**
+ * Turns one prompt into a space the person manages.
+ *
+ * No form, no preview step and no second request: the builder designs the
+ * space from the prompt and the space-builder document, the policy baseline
+ * decides whether it may exist, and it is stored and - unless a person needs
+ * to look first - published, all at once. Editing happens afterwards, on the
+ * published space.
+ *
+ * The creator is its manager by construction: `getSpace` treats the creator
+ * as able to manage, exactly as for a space built any other way.
+ *
+ * A BLOCK is an answer, not an error. Nothing is created, no slug is taken,
+ * and the person gets the rule that matched so they know what to rewrite.
+ */
+export async function buildSpaceFromPrompt(
+  repo: SpaceRepository,
+  builder: SpaceBuilder,
+  creatorId: string,
+  prompt: string
+): Promise<BuildSpaceOutcome> {
+  const result = await builder.build(prompt, creatorId);
+
+  if (result.decision === 'BLOCK' || !result.space) {
+    return {
+      outcome: 'BLOCKED',
+      space: null,
+      reason: result.reason,
+      matchedPolicyRules: result.matchedPolicyRules,
+      policyVersionRef: result.policyVersionRef,
+      creativityApplied: result.creativityApplied,
+    };
+  }
+
+  const built = result.space;
+  const slug = await generateUniqueSlug(built.title, (candidate) => repo.slugExists(candidate));
+
+  // Role keys are assigned here rather than by the model: they must match
+  // ^[a-z0-9_-]+$ and carry no meaning a person ever sees.
+  const primaries = built.roles.filter((role) => role.isPrimary);
+  const supporting = built.roles.filter((role) => !role.isPrimary);
+  const roles: SpaceRoleInputRecord[] = [
+    ...primaries.map((role, i) => ({
+      key: `primary-${i + 1}`,
+      title: role.title,
+      ...(role.description ? { description: role.description } : {}),
+      isPrimary: true,
+    })),
+    ...supporting.map((role, i) => ({
+      key: `supporting-${i + 1}`,
+      title: role.title,
+      ...(role.description ? { description: role.description } : {}),
+      isPrimary: false,
+    })),
+  ];
+
+  const publish = result.decision === 'PUBLISH';
+  const { id } = await repo.createBuiltSpace({
+    slug,
+    creatorId,
+    title: built.title,
+    purpose: built.description,
+    ...(built.audience ? { audience: built.audience } : {}),
+    participationMethods: built.participationMethods,
+    cardHints: built.cardHints.map((hint) => ({
+      isExample: true as const,
+      label: 'نمونه' as const,
+      title: hint.title,
+      ...(hint.description ? { description: hint.description } : {}),
+    })),
+    roles,
+    policyVersion: 1,
+    status: publish ? 'PUBLISHED' : 'HUMAN_REVIEW',
+    verdict: publish ? 'ALLOW' : 'HUMAN_REVIEW',
+    reason: result.reason,
+    policyVersionRef: result.policyVersionRef,
+    matchedPolicyRules: result.matchedPolicyRules,
+    documentRef: result.documentRef,
+    creativityApplied: result.creativityApplied,
+  });
+
+  return {
+    outcome: publish ? 'PUBLISHED' : 'HUMAN_REVIEW',
+    space: { id, slug },
+    reason: result.reason,
+    matchedPolicyRules: result.matchedPolicyRules,
+    policyVersionRef: result.policyVersionRef,
+    creativityApplied: result.creativityApplied,
+  };
+}
+
+const MIN_PUBLISHED_PURPOSE_LENGTH = 20;
+
+const EDIT_REFUSAL_REASONS = {
+  BLOCK: 'این ویرایش با یکی از قواعد صریح پلتفرم مغایرت دارد و اعمال نشد. نسخهٔ منتشرشده بدون تغییر ماند.',
+  HUMAN_REVIEW: 'این ویرایش پیش از اعمال به نگاه یک نفر نیاز دارد و اعمال نشد. نسخهٔ منتشرشده بدون تغییر ماند.',
+} as const;
+
+function rolesText(roles: { title: string; description?: string | null }[]): string {
+  return roles.map((role) => `${role.title}\n${role.description ?? ''}`).join('\n');
+}
+
+function hintsText(hints: SpaceCardHint[] | null | undefined): string {
+  return (hints ?? []).map((hint) => `${hint.title}\n${hint.description ?? ''}`).join('\n');
+}
+
+/**
+ * Edits a space, whatever state it is in.
+ *
+ * Before publication this is the existing draft edit. After it - the path the
+ * one-prompt flow leads to - the change is checked against the policy baseline
+ * before it becomes visible, and applied to the published space only if it
+ * passes. A refused edit leaves what is published exactly as it was.
+ *
+ * Ambiguity signals are read from what the person changed, not from the whole
+ * definition: a model-written description may mention "respectful
+ * disagreement", and refusing a title fix over wording nobody touched would
+ * make a space uneditable for being well described.
+ */
+export async function editSpace(
+  repo: SpaceRepository,
+  gate: SpaceCreationGate,
+  spaceId: string,
+  userId: string,
+  input: {
+    title: string;
+    purpose: string;
+    audience?: string;
+    participationMethods: string[];
+    cardHints?: SpaceCardHint[];
+    roles: SpaceRoleInputRecord[];
+    policyVersion: number;
+  }
+): Promise<{ versionNumber: number }> {
+  const space = await loadForEdit(repo, spaceId, userId);
+  if (space.status !== 'PUBLISHED') return updateSpaceDefinition(repo, spaceId, userId, input);
+  assertNoDuplicateRoleKeys(input.roles);
+
+  // Structural gaps get a specific message rather than a generic REVISE: the
+  // person is looking at the form and needs to know which field.
+  const primaryCount = input.roles.filter((role) => role.isPrimary).length;
+  if (input.purpose.trim().length < MIN_PUBLISHED_PURPOSE_LENGTH) {
+    throw new SpaceEditRefusedError('REVISE', `معرفی بستر باید دست‌کم ${MIN_PUBLISHED_PURPOSE_LENGTH} نویسه باشد.`, []);
+  }
+  if (input.participationMethods.length < 1) {
+    throw new SpaceEditRefusedError('REVISE', 'دست‌کم یک روش مشارکت لازم است.', []);
+  }
+  if (primaryCount !== 2) {
+    throw new SpaceEditRefusedError('REVISE', 'بستر باید دقیقاً دو نقش اصلی داشته باشد.', []);
+  }
+
+  const current = space.latestVersion;
+  const changed: string[] = [];
+  if (input.title !== current.title) changed.push(input.title);
+  if (input.purpose !== current.purpose) changed.push(input.purpose);
+  if ((input.audience ?? '') !== (current.audience ?? '')) changed.push(input.audience ?? '');
+  if (JSON.stringify(input.participationMethods) !== JSON.stringify(current.participationMethods)) {
+    changed.push(...input.participationMethods);
+  }
+  if (rolesText(input.roles) !== rolesText(referencedRoles(space))) changed.push(rolesText(input.roles));
+  if (hintsText(input.cardHints) !== hintsText(current.cardHints)) changed.push(hintsText(input.cardHints));
+
+  const verdict = await gate.check({
+    title: input.title,
+    purpose: input.purpose,
+    participationMethods: input.participationMethods,
+    primaryRoleCount: primaryCount,
+    publicText: [input.audience ?? '', rolesText(input.roles), hintsText(input.cardHints)].join('\n'),
+    ambiguityText: changed.join('\n'),
+  });
+
+  if (verdict.verdict === 'BLOCK' || verdict.verdict === 'HUMAN_REVIEW') {
+    throw new SpaceEditRefusedError(verdict.verdict, EDIT_REFUSAL_REASONS[verdict.verdict], verdict.matchedPolicyRules);
+  }
+  if (verdict.verdict !== 'ALLOW') {
+    throw new SpaceEditRefusedError(verdict.verdict, verdict.reason, verdict.matchedPolicyRules);
+  }
+
+  return repo.publishNewVersion({
+    spaceId,
+    ...input,
+    createdBy: userId,
+    gateReason: verdict.reason,
+    policyVersionRef: verdict.policyVersionRef,
+    matchedPolicyRules: verdict.matchedPolicyRules,
+  });
 }
 
 /** "publish حداقل title، purpose، یک participation method و دو نقش اصلی متفاوت بخواهد" - re-checked here independently of the gate, which already implies these via REVISE, as defense in depth. */

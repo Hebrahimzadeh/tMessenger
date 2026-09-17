@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loginViaDevOtp } from './helpers/dev-login';
+import { buildSpaceFromPrompt, LENDING_PROMPT } from './helpers/build-space';
 
 // Targets the local dev stack - see auth.spec.ts's header comment for how
 // to start the API. Exercises the real, private "مشارکت‌های من" timeline
@@ -14,24 +15,11 @@ import { loginViaDevOtp } from './helpers/dev-login';
 // correctly-empty dashboard state instead.
 
 test('a real card creation appears in the author\'s own private participation timeline', async ({ page }) => {
-  await loginViaDevOtp(page, '/spaces/new');
+  await loginViaDevOtp(page, '/');
 
+  // One prompt, no fields (owner decision 2026-09-17).
   const title = `بستر آگاهی آزمایشی ${Math.floor(Math.random() * 1_000_000)}`;
-  await page.getByLabel('عنوان بستر').fill(title);
-  await page
-    .getByLabel('این بستر برای چیست؟')
-    .fill('این بستر برای هماهنگی داوطلبانه‌ی نگهداری باغچه‌ی محله تشکیل شده است.');
-  await page.getByRole('button', { name: 'ادامه' }).click();
-  await expect(page.getByLabel('نقش اصلی اول')).toBeVisible();
-  await page.getByLabel('روش‌های مشارکت (با ویرگول جدا کنید)').fill('حضوری');
-  await page.getByRole('button', { name: 'ادامه' }).click();
-  await expect(page.getByText('این بستر آمادهٔ انتشار است.')).toBeVisible();
-  await page.getByRole('button', { name: 'انتشار' }).click();
-  await expect(page.getByText('بستر شما منتشر شد!')).toBeVisible();
-
-  const spaceLink = page.getByRole('link', { name: 'مشاهدهٔ بستر' });
-  const href = await spaceLink.getAttribute('href');
-  await page.goto(new URL(href!, page.url()).toString());
+  await buildSpaceFromPrompt(page, `${LENDING_PROMPT} - ${title}`);
 
   await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
   await page.getByLabel('متن کارت').fill('یک اطلاعیهٔ آزمایشی برای بررسی مشارکت‌های من.');

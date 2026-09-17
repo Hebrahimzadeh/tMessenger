@@ -26,6 +26,7 @@ export const aiCapabilitySchema = z.enum([
   'CARD_DRAFT',
   'ASSISTANT_REPLY',
   'MODERATION_ASSIST',
+  'SPACE_BUILD',
 ]);
 export type AiCapability = z.infer<typeof aiCapabilitySchema>;
 
@@ -146,6 +147,80 @@ export const spaceCreationGuidanceSchema = z.object({
 });
 export type SpaceCreationGuidance = z.infer<typeof spaceCreationGuidanceSchema>;
 
+// --- One-prompt space building (owner decision 2026-09-17) ----------------
+
+/** How long a person's prompt may be. Long enough to describe an idea, short enough to stay a prompt. */
+export const SPACE_BUILD_PROMPT_MAX_CHARS = 2000;
+
+export const spaceBuildRoleSchema = z.object({
+  title: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(300).default(''),
+  isPrimary: z.boolean(),
+});
+
+export const spaceBuildCardHintSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(1000).default(''),
+});
+
+/**
+ * A whole space, from one prompt.
+ *
+ * The shape is exactly what the space model can store and nothing more, so
+ * a model cannot smuggle in a field the domain would quietly drop or, worse,
+ * one it would act on. Role keys are deliberately absent: they must match
+ * `^[a-z0-9_-]+$`, a model writing Persian gets them wrong constantly, and a
+ * key carries no meaning a person would ever see - the server assigns them.
+ *
+ * "Exactly two primary roles" is enforced here rather than trusted, because
+ * it is what publishing requires and a model saying so is not the same as it
+ * being so.
+ *
+ * `reviewNote` is the model's only lever on the outcome, and it only points
+ * one way: filling it holds a space back for a person to look at. It cannot
+ * publish anything, block anything, or change what the policy rules decide.
+ */
+export const spaceBuildOutputSchema = z
+  .object({
+    kind: z.literal('SPACE_BUILD'),
+    title: z.string().trim().min(3).max(80),
+    description: z.string().trim().min(40).max(1200),
+    audience: z.string().trim().max(300).default(''),
+    participationMethods: z.array(z.string().trim().min(1).max(100)).min(1).max(5),
+    roles: z.array(spaceBuildRoleSchema).min(2).max(6),
+    cardHints: z.array(spaceBuildCardHintSchema).max(3).default([]),
+    reviewNote: z.string().trim().max(300).default(''),
+  })
+  .refine((space) => space.roles.filter((role) => role.isPrimary).length === 2, {
+    message: 'A space needs exactly two primary roles.',
+    path: ['roles'],
+  });
+export type SpaceBuildOutput = z.infer<typeof spaceBuildOutputSchema>;
+
+export const buildSpaceBodySchema = z.object({
+  prompt: z.string().trim().min(1).max(SPACE_BUILD_PROMPT_MAX_CHARS),
+});
+export type BuildSpaceBody = z.infer<typeof buildSpaceBodySchema>;
+
+/**
+ * What happened to a prompt.
+ *
+ * PUBLISHED - the space exists and is public; `space` points at it.
+ * HUMAN_REVIEW - the space exists, belongs to the person, and is not public
+ *   until someone looks; `space` points at it so they can still see it.
+ * BLOCKED - an explicit SEVERE rule matched, and nothing was created at all.
+ */
+export const buildSpaceResponseSchema = z.object({
+  outcome: z.enum(['PUBLISHED', 'HUMAN_REVIEW', 'BLOCKED']),
+  space: z.object({ id: z.string().uuid(), slug: z.string() }).nullable(),
+  reason: z.string(),
+  matchedPolicyRules: z.array(z.string()),
+  policyVersionRef: z.string(),
+  /** False when rules alone built the space because no model answered. Shown, never hidden. */
+  creativityApplied: z.boolean(),
+});
+export type BuildSpaceResponse = z.infer<typeof buildSpaceResponseSchema>;
+
 export const cardDraftOutputSchema = z.object({
   kind: z.literal('CARD_DRAFT'),
   title: z.string().min(1).max(200),
@@ -169,6 +244,7 @@ export const aiOutputSchema = z.discriminatedUnion('kind', [
   cardDraftOutputSchema,
   assistantReplyOutputSchema,
   moderationAssistOutputSchema,
+  spaceBuildOutputSchema,
 ]);
 export type AiOutput = z.infer<typeof aiOutputSchema>;
 
@@ -178,6 +254,7 @@ export const OUTPUT_SCHEMA_BY_CAPABILITY = {
   CARD_DRAFT: cardDraftOutputSchema,
   ASSISTANT_REPLY: assistantReplyOutputSchema,
   MODERATION_ASSIST: moderationAssistOutputSchema,
+  SPACE_BUILD: spaceBuildOutputSchema,
 } as const;
 
 export const aiResultViewSchema = z.object({

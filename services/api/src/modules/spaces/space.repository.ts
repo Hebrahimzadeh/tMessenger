@@ -169,6 +169,131 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
       });
     },
 
+    async createBuiltSpace(input) {
+      return prisma.$transaction(async (tx) => {
+        const publishedAt = input.status === 'PUBLISHED' ? new Date() : null;
+        const space = await tx.space.create({
+          data: {
+            slug: input.slug,
+            creatorId: input.creatorId,
+            status: input.status,
+            publishedAt,
+            searchText: buildSearchText(input.title, input.purpose, input.audience),
+          },
+        });
+        const { primaryRoleIds, supplementaryRoleIds } = await upsertRoles(tx, space.id, input.roles);
+        await tx.spaceDefinitionVersion.create({
+          data: {
+            spaceId: space.id,
+            versionNumber: 1,
+            title: input.title,
+            purpose: input.purpose,
+            audience: input.audience,
+            participationMethods: input.participationMethods,
+            cardHints: input.cardHints,
+            primaryRoleIds,
+            supplementaryRoleIds,
+            policyVersion: input.policyVersion,
+            createdBy: input.creatorId,
+            gateVerdict: input.verdict,
+            gateReason: input.reason,
+          },
+        });
+        await tx.outboxEvent.create({
+          data: {
+            aggregateType: 'Space',
+            aggregateId: space.id,
+            eventType: 'space.created',
+            payload: { spaceId: space.id, slug: space.slug, creatorId: input.creatorId },
+          },
+        });
+        if (publishedAt) {
+          await tx.outboxEvent.create({
+            data: { aggregateType: 'Space', aggregateId: space.id, eventType: 'space.published', payload: { spaceId: space.id } },
+          });
+        }
+        // Which document and which baseline produced this space, and whether a
+        // model wrote it - so a space is explainable after either changes.
+        await tx.auditEvent.create({
+          data: {
+            actorId: input.creatorId,
+            action: 'space.built',
+            targetType: 'Space',
+            targetId: space.id,
+            reason: input.reason,
+            correlationId: `space-build:${space.id}`,
+            metadata: {
+              verdict: input.verdict,
+              policyVersionRef: input.policyVersionRef,
+              matchedPolicyRules: input.matchedPolicyRules,
+              documentRef: input.documentRef,
+              creativityApplied: input.creativityApplied,
+            },
+          },
+        });
+        return { id: space.id };
+      });
+    },
+
+    async publishNewVersion(input) {
+      return prisma.$transaction(async (tx) => {
+        const { primaryRoleIds, supplementaryRoleIds } = await upsertRoles(tx, input.spaceId, input.roles);
+        const latest = await tx.spaceDefinitionVersion.findFirst({
+          where: { spaceId: input.spaceId },
+          orderBy: { versionNumber: 'desc' },
+          select: { versionNumber: true },
+        });
+        const versionNumber = (latest?.versionNumber ?? 0) + 1;
+
+        await tx.spaceDefinitionVersion.create({
+          data: {
+            spaceId: input.spaceId,
+            versionNumber,
+            title: input.title,
+            purpose: input.purpose,
+            audience: input.audience,
+            participationMethods: input.participationMethods,
+            cardHints: input.cardHints ?? undefined,
+            primaryRoleIds,
+            supplementaryRoleIds,
+            policyVersion: input.policyVersion,
+            createdBy: input.createdBy,
+            gateVerdict: 'ALLOW',
+            gateReason: input.gateReason,
+          },
+        });
+        // Status deliberately untouched: it stays PUBLISHED.
+        await tx.space.update({
+          where: { id: input.spaceId },
+          data: { searchText: buildSearchText(input.title, input.purpose, input.audience) },
+        });
+        await tx.outboxEvent.create({
+          data: {
+            aggregateType: 'Space',
+            aggregateId: input.spaceId,
+            eventType: 'space.versioned',
+            payload: { spaceId: input.spaceId, versionNumber },
+          },
+        });
+        await tx.auditEvent.create({
+          data: {
+            actorId: input.createdBy,
+            action: 'space.edited',
+            targetType: 'Space',
+            targetId: input.spaceId,
+            reason: input.gateReason,
+            correlationId: `space-edit:${input.spaceId}:${versionNumber}`,
+            metadata: {
+              versionNumber,
+              policyVersionRef: input.policyVersionRef,
+              matchedPolicyRules: input.matchedPolicyRules,
+            },
+          },
+        });
+        return { versionNumber };
+      });
+    },
+
     async setGateVerdict(input) {
       const { spaceId, versionNumber, verdict, reason, newStatus, actorId, policyVersionRef, matchedPolicyRules } = input;
       await prisma.$transaction(async (tx) => {

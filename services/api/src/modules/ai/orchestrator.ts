@@ -57,6 +57,23 @@ export interface OrchestratorRepository {
   conversationKind: ConversationKindLookup;
 }
 
+/**
+ * What a server-side capability may add to a request, and a browser never can.
+ *
+ * Deliberately a separate argument rather than fields on `AiRequestInput`,
+ * which is also the public `/ai/suggest` body. Task 23 removed a route that
+ * forwarded a browser-supplied system instruction straight to the model - the
+ * strongest lever there is over what a model does - and putting these on the
+ * public schema would reopen exactly that hole.
+ */
+export interface GenerateOptions {
+  /** A versioned document from this codebase, sent as the model's system instruction. */
+  systemInstruction?: string;
+  /** Overrides the default for a capability that legitimately needs longer, e.g. designing a whole space. */
+  timeoutMs?: number;
+  maxOutputTokens?: number;
+}
+
 export interface OrchestratorOptions {
   provider: AiProvider | null;
   repository: OrchestratorRepository;
@@ -127,7 +144,7 @@ export class AiOrchestrator {
     this.circuit = new CircuitBreaker(this.now);
   }
 
-  async generate(rawInput: AiRequestInput, requesterId: string | null): Promise<AiResultView> {
+  async generate(rawInput: AiRequestInput, requesterId: string | null, options: GenerateOptions = {}): Promise<AiResultView> {
     const input = aiRequestInputSchema.parse(rawInput);
 
     // The guard runs before anything is stored, so a refused request leaves
@@ -187,7 +204,9 @@ export class AiOrchestrator {
         // Minimization: the prompt is the template plus this one input, never
         // a conversation history or anything the caller did not pass.
         prompt: renderPrompt(promptVersion?.template ?? null, input.text),
-        timeoutMs: this.timeoutMs,
+        systemInstruction: options.systemInstruction,
+        timeoutMs: options.timeoutMs ?? this.timeoutMs,
+        maxOutputTokens: options.maxOutputTokens,
       });
     } catch (err) {
       this.circuit.recordFailure();

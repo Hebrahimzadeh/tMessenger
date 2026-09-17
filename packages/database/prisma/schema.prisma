@@ -1238,6 +1238,8 @@ enum AiCapability {
   CARD_DRAFT
   ASSISTANT_REPLY
   MODERATION_ASSIST
+  /// A whole space from one prompt (owner decision 2026-09-17).
+  SPACE_BUILD
 }
 
 enum AiOutcome {

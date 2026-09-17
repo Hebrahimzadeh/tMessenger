@@ -7,6 +7,8 @@ export interface ProviderInput {
   systemInstruction?: string;
   /** Hard ceiling the orchestrator enforces on its own side too. */
   timeoutMs: number;
+  /** Output cap. A provider picks its own default when absent. */
+  maxOutputTokens?: number;
 }
 
 export interface ProviderResult {

@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { loginViaDevOtp } from './helpers/dev-login';
+import { buildSpaceFromPrompt, LENDING_PROMPT } from './helpers/build-space';
 
 // Targets the local dev stack - see auth.spec.ts's header comment for how
 // to start the API. "نردبان" (ladder) is this plan's own running example
@@ -10,24 +11,9 @@ import { loginViaDevOtp } from './helpers/dev-login';
 // phrase, never a "منقضی" tag or any other terminal badge in the feed.
 
 async function createAndPublishSpace(page: Page, title: string): Promise<string> {
-  await page.goto('/spaces/new');
-  await page.getByLabel('عنوان بستر').fill(title);
-  await page
-    .getByLabel('این بستر برای چیست؟')
-    .fill('این بستر برای هماهنگی داوطلبانه‌ی نگهداری ابزار مشترک محله تشکیل شده است.');
-  await page.getByRole('button', { name: 'ادامه' }).click();
-
-  await expect(page.getByLabel('نقش اصلی اول')).toBeVisible();
-  await page.getByLabel('روش‌های مشارکت (با ویرگول جدا کنید)').fill('حضوری');
-  await page.getByRole('button', { name: 'ادامه' }).click();
-
-  await expect(page.getByText('این بستر آمادهٔ انتشار است.')).toBeVisible();
-  await page.getByRole('button', { name: 'انتشار' }).click();
-  await expect(page.getByText('بستر شما منتشر شد!')).toBeVisible();
-
-  const spaceLink = page.getByRole('link', { name: 'مشاهدهٔ بستر' });
-  const href = await spaceLink.getAttribute('href');
-  return new URL(href!, page.url()).toString();
+  // One prompt, no fields: the title is carried in the prompt so the built
+  // space is recognisable, and the space is published and shown straight away.
+  return buildSpaceFromPrompt(page, `${LENDING_PROMPT} - ${title}`);
 }
 
 test('two users take a REUSABLE_RESOURCE card through the full ladder: create, public comment, reserve, chat redirect, in-use, close(RETURNED), disabled reservation', async ({

@@ -3,8 +3,12 @@ import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { describe, expect, it } from 'vitest';
 import type { SpaceStatus } from '@taavon/database';
+import { ZodError } from 'zod';
+import { apiError } from '../../lib/api-error';
 import { spaceRoutes } from './space.route';
-import { fixtureGate } from '../ai/capabilities/policy.fixtures';
+import { fixtureGate, fixturePolicySource, noopOrchestratorRepository } from '../ai/capabilities/policy.fixtures';
+import { AiOrchestrator } from '../ai/orchestrator';
+import { buildSpace } from '../ai/capabilities/space-builder';
 import { ACCESS_TOKEN_COOKIE, signAccessToken } from '../auth/session-tokens';
 import type { SpaceRepository, SpaceRoleRecord, SpaceVersionRecord } from './space.service';
 import type { SpaceHealthRepository } from '@taavon/space-health';
@@ -25,6 +29,8 @@ function fakeSpaceRepo(): SpaceRepository {
   const versionsBySpace = new Map<string, SpaceVersionRecord[]>();
   const rolesBySpace = new Map<string, SpaceRoleRecord[]>();
   const invites = new Map<string, { spaceId: string; revokedAt: Date | null }>();
+  const builtAudit: Parameters<SpaceRepository['createBuiltSpace']>[0][] = [];
+  const newId = (_prefix: string) => randomUUID();
 
   function record(id: string) {
     const space = spaces.get(id);
@@ -93,6 +99,73 @@ function fakeSpaceRepo(): SpaceRepository {
       spaces.get(spaceId)!.status = 'DRAFT';
       return { versionNumber };
     },
+    async createBuiltSpace(input) {
+      const id = newId('space');
+      spaces.set(id, {
+        id,
+        slug: input.slug,
+        status: input.status,
+        creatorId: input.creatorId,
+        publishedAt: input.status === 'PUBLISHED' ? new Date('2026-09-17T12:00:00Z') : null,
+        archivedAt: null,
+      });
+      const roleRecords: SpaceRoleRecord[] = input.roles.map((role) => ({
+        id: newId('role'),
+        key: role.key,
+        title: role.title,
+        description: role.description ?? null,
+        isPrimary: role.isPrimary,
+      }));
+      rolesBySpace.set(id, roleRecords);
+      versionsBySpace.set(id, [
+        {
+          versionNumber: 1,
+          title: input.title,
+          purpose: input.purpose,
+          audience: input.audience ?? null,
+          participationMethods: input.participationMethods,
+          cardHints: input.cardHints,
+          policyVersion: input.policyVersion,
+          gateVerdict: input.verdict,
+          gateReason: input.reason,
+          primaryRoleIds: roleRecords.filter((r) => r.isPrimary).map((r) => r.id),
+          supplementaryRoleIds: roleRecords.filter((r) => !r.isPrimary).map((r) => r.id),
+        },
+      ]);
+      builtAudit.push(input);
+      return { id };
+    },
+
+    async publishNewVersion({ spaceId, roles, createdBy: _createdBy, gateReason, policyVersionRef: _ref, matchedPolicyRules: _rules, ...rest }) {
+      const byKey = new Map((rolesBySpace.get(spaceId) ?? []).map((r) => [r.key, r]));
+      for (const input of roles) {
+        const existing = byKey.get(input.key);
+        byKey.set(input.key, {
+          id: existing?.id ?? newId('role'),
+          key: input.key,
+          title: input.title,
+          description: input.description ?? null,
+          isPrimary: input.isPrimary,
+        });
+      }
+      rolesBySpace.set(spaceId, [...byKey.values()]);
+      const versions = versionsBySpace.get(spaceId) ?? [];
+      const versionNumber = versions.length + 1;
+      versions.push({
+        ...rest,
+        audience: rest.audience ?? null,
+        cardHints: rest.cardHints ?? null,
+        versionNumber,
+        gateVerdict: 'ALLOW',
+        gateReason,
+        primaryRoleIds: roles.filter((r) => r.isPrimary).map((r) => byKey.get(r.key)!.id),
+        supplementaryRoleIds: roles.filter((r) => !r.isPrimary).map((r) => byKey.get(r.key)!.id),
+      });
+      versionsBySpace.set(spaceId, versions);
+      // Status deliberately untouched, as in the real repository.
+      return { versionNumber };
+    },
+
     async setGateVerdict({ spaceId, versionNumber, verdict, reason, newStatus }) {
       const version = versionsBySpace.get(spaceId)!.find((v) => v.versionNumber === versionNumber)!;
       version.gateVerdict = verdict;
@@ -155,6 +228,14 @@ function fakeHealthRepo(overrides: Partial<SpaceHealthRepository> = {}): SpaceHe
 function buildApp(repo: SpaceRepository, healthRepo?: SpaceHealthRepository) {
   const app = Fastify();
   app.register(cookie);
+  // The same mapping buildApp installs, so a malformed body is the 400 it is in production.
+  app.setErrorHandler((err, request, reply) => {
+    if (err instanceof ZodError) {
+      reply.code(400).send(apiError(request, 'VALIDATION_ERROR', 'داده ارسالی معتبر نیست.', err.issues));
+      return;
+    }
+    reply.send(err);
+  });
   app.register(spaceRoutes, {
     prefix: '/v1/spaces',
     sessionHmacKey: SESSION_HMAC_KEY,
@@ -163,6 +244,19 @@ function buildApp(repo: SpaceRepository, healthRepo?: SpaceHealthRepository) {
     // The real gate over the seeded baseline. The route's own fallback would
     // reach for `app.db`, which these tests deliberately do not have.
     spaceCreationGate: fixtureGate(),
+    // The real builder over the seeded baseline with no model: complete,
+    // rule-built spaces, decided exactly as production decides them.
+    spaceBuilder: {
+      build: (prompt, requesterId) =>
+        buildSpace(
+          {
+            orchestrator: new AiOrchestrator({ provider: null, repository: noopOrchestratorRepository(), dailyBudgetMicros: null }),
+            policy: fixturePolicySource,
+          },
+          prompt,
+          requesterId
+        ),
+    },
   });
   return app;
 }
@@ -492,6 +586,154 @@ describe('GET /v1/spaces/:spaceId/health', () => {
     expect(body.suggestions).toEqual([{ code: 'CREATE_FIRST_CARD' }]);
     expect(Object.keys(body)).not.toContain('score');
     expect(Object.keys(body)).not.toContain('overallScore');
+    await app.close();
+  });
+});
+
+
+describe('POST /v1/spaces/build - one prompt, a whole space', () => {
+  it('requires a session', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const res = await app.inject({ method: 'POST', url: '/v1/spaces/build', payload: { prompt: 'امانت ابزار' } });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('builds and publishes from nothing but the prompt', async () => {
+    const app = buildApp(fakeSpaceRepo());
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/spaces/build',
+      cookies: sessionCookieFor(USER_1),
+      payload: { prompt: 'یه کار خوب برای محله' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ outcome: 'PUBLISHED', policyVersionRef: 'baseline:v1:8rules', creativityApplied: false });
+
+    // Public straight away, and the person who wrote the prompt manages it.
+    const anonymous = await app.inject({ method: 'GET', url: `/v1/spaces/${body.space.slug}` });
+    expect(anonymous.statusCode).toBe(200);
+    const asCreator = await app.inject({ method: 'GET', url: `/v1/spaces/${body.space.id}`, cookies: sessionCookieFor(USER_1) });
+    expect(asCreator.json().canManage).toBe(true);
+    await app.close();
+  });
+
+  it('accepts no fields other than the prompt', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/spaces/build',
+      cookies: sessionCookieFor(USER_1),
+      payload: { prompt: 'امانت ابزار محله', title: 'عنوانی که نباید اثر کند', status: 'PUBLISHED' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const space = await app.inject({ method: 'GET', url: `/v1/spaces/${res.json().space.id}` });
+    expect(space.json().definition.title).not.toBe('عنوانی که نباید اثر کند');
+    await app.close();
+  });
+
+  it('answers a forbidden prompt with the rule, and creates nothing', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/spaces/build',
+      cookies: sessionCookieFor(USER_1),
+      payload: { prompt: 'بستری برای شرط‌بندی روی بازی‌ها' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'BLOCKED', space: null });
+    expect(res.json().matchedPolicyRules[0]).toContain('gambling@v1');
+    await app.close();
+  });
+
+  it('rejects an empty prompt', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/spaces/build',
+      cookies: sessionCookieFor(USER_1),
+      payload: { prompt: '   ' },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('PATCH /v1/spaces/:id after publication', () => {
+  async function built(app: ReturnType<typeof buildApp>) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/spaces/build',
+      cookies: sessionCookieFor(USER_1),
+      payload: { prompt: 'امانت ابزار محله' },
+    });
+    const { id } = res.json().space;
+    const view = (await app.inject({ method: 'GET', url: `/v1/spaces/${id}`, cookies: sessionCookieFor(USER_1) })).json();
+    const body = {
+      title: view.definition.title,
+      purpose: view.definition.purpose,
+      participationMethods: view.definition.participationMethods,
+      roles: view.definition.roles.map((r: { key: string; title: string; description: string | null; isPrimary: boolean }) => ({
+        key: r.key,
+        title: r.title,
+        ...(r.description ? { description: r.description } : {}),
+        isPrimary: r.isPrimary,
+      })),
+      policyVersion: 1,
+    };
+    return { id, body };
+  }
+
+  it('applies the edit and keeps the space public', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const { id, body } = await built(app);
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/v1/spaces/${id}`,
+      cookies: sessionCookieFor(USER_1),
+      payload: { ...body, title: 'امانت ابزار کوچه' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'PUBLISHED', definition: { title: 'امانت ابزار کوچه' } });
+    await app.close();
+  });
+
+  it('refuses a forbidden edit with 422 and the rule, leaving the public version as it was', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const { id, body } = await built(app);
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/v1/spaces/${id}`,
+      cookies: sessionCookieFor(USER_1),
+      payload: { ...body, purpose: `${body.purpose} با قمار.` },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('SPACE_EDIT_REFUSED');
+    expect(res.json().error.details[0]).toContain('gambling@v1');
+    const publicView = await app.inject({ method: 'GET', url: `/v1/spaces/${id}` });
+    expect(publicView.json().definition.purpose).toBe(body.purpose);
+    await app.close();
+  });
+
+  it('forbids a stranger', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const { id, body } = await built(app);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/v1/spaces/${id}`,
+      cookies: sessionCookieFor(STRANGER),
+      payload: { ...body, title: 'تصاحب' },
+    });
+    expect(res.statusCode).toBe(403);
     await app.close();
   });
 });

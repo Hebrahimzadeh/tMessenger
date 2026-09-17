@@ -1,4 +1,6 @@
 import type { AiCapability, AiOutput } from '@taavon/contracts';
+import { buildSpaceFromRules } from './capabilities/space-builder-rules';
+import { extractUserPrompt } from './capabilities/space-builder';
 
 /**
  * What each capability answers when the model is unusable.
@@ -41,6 +43,12 @@ export function fallbackFor(capability: AiCapability, input: string): AiOutput {
         reply:
           'الان نمی‌توانم پاسخ بدهم. می‌توانید کارت یا بستر را دستی بسازید؛ هیچ‌کدام از مسیرها به من وابسته نیست.',
       };
+
+    case 'SPACE_BUILD':
+      // The orchestrator only ever sees the prompt wrapped in the document's
+      // markers, so unwrap it first - otherwise the rule builder would read
+      // the markers as part of what the person wanted.
+      return buildSpaceFromRules(extractUserPrompt(input));
 
     case 'MODERATION_ASSIST':
       return {

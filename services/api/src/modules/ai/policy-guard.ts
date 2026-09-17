@@ -21,6 +21,9 @@ export const SOURCE_ALLOWLIST: Record<AiCapability, readonly AiInputSource[]> = 
   CARD_DRAFT: ['PUBLIC_USER_INPUT', 'PUBLIC_SPACE_DATA'],
   ASSISTANT_REPLY: ['PUBLIC_USER_INPUT', 'ASSISTANT_CONVERSATION'],
   MODERATION_ASSIST: ['MODERATION_GRANTED_CONTEXT'],
+  // What the person typed into the one prompt box, and nothing else - no
+  // space data, no conversation, nothing they did not write for this purpose.
+  SPACE_BUILD: ['PUBLIC_USER_INPUT'],
 };
 
 /**

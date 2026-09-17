@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import {
   archiveSpaceResponseSchema,
+  buildSpaceBodySchema,
+  buildSpaceResponseSchema,
   createSpaceBodySchema,
   createSpaceInviteResponseSchema,
   precheckSpaceResponseSchema,
@@ -22,9 +24,11 @@ import { AiOrchestrator } from '../ai/orchestrator';
 import { createPrismaOrchestratorRepository } from '../ai/ai.repository';
 import {
   archiveSpace,
+  buildSpaceFromPrompt,
   createSpace,
   createSpaceInvite,
   DuplicateRoleKeyError,
+  editSpace,
   GateNotAllowedError,
   getSpace,
   InviteNotFoundError,
@@ -37,11 +41,13 @@ import {
   revokeSpaceInvite,
   RoleNotFoundError,
   SpaceBlockedError,
+  SpaceEditRefusedError,
   SpaceNotEditableError,
   SpaceNotFoundError,
-  updateSpaceDefinition,
+  type SpaceBuilder,
   type SpaceRepository,
 } from './space.service';
+import { buildSpace } from '../ai/capabilities/space-builder';
 
 export interface SpaceRouteOptions {
   sessionHmacKey: string;
@@ -49,6 +55,8 @@ export interface SpaceRouteOptions {
   spaceHealthRepository?: SpaceHealthRepository;
   /** Normally supplied by `buildApp`, which shares one orchestrator between this gate and `/ai/suggest`. */
   spaceCreationGate?: SpaceCreationGate;
+  /** Normally supplied by `buildApp`, sharing the one orchestrator with every other AI-backed route. */
+  spaceBuilder?: SpaceBuilder;
 }
 
 function toResponse(view: Awaited<ReturnType<typeof getSpace>>) {
@@ -92,6 +100,36 @@ export async function spaceRoutes(app: FastifyInstance, opts: SpaceRouteOptions)
       )
     );
   }
+
+  // Same reasoning as the gate's fallback: registrable on its own, with no
+  // provider, which costs only the model's writing - the rule-built space is
+  // complete and the policy baseline still decides.
+  function builder(): SpaceBuilder {
+    if (opts.spaceBuilder) return opts.spaceBuilder;
+    const orchestrator = new AiOrchestrator({
+      provider: null,
+      repository: createPrismaOrchestratorRepository(() => app.db),
+      dailyBudgetMicros: null,
+    });
+    const policy = createPrismaPolicyRuleSource(() => app.db);
+    return { build: (prompt, requesterId) => buildSpace({ orchestrator, policy }, prompt, requesterId) };
+  }
+
+  /**
+   * One prompt, a whole space - the way spaces are made.
+   *
+   * 200 for every decision, BLOCKED included: a refusal here is an answer the
+   * person needs to read (which rule, what to rewrite), not a malformed
+   * request, and the body carries everything the page needs either way.
+   */
+  app.post('/build', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const body = buildSpaceBodySchema.parse(request.body);
+
+    const result = await buildSpaceFromPrompt(repo(), builder(), user.userId, body.prompt);
+    return buildSpaceResponseSchema.parse(result);
+  });
 
   app.post('/', async (request, reply) => {
     const user = requireSession(request, reply, opts.sessionHmacKey);
@@ -147,7 +185,7 @@ export async function spaceRoutes(app: FastifyInstance, opts: SpaceRouteOptions)
     const body = updateSpaceDefinitionBodySchema.parse(request.body);
 
     try {
-      await updateSpaceDefinition(repo(), spaceId, user.userId, body);
+      await editSpace(repo(), gate(), spaceId, user.userId, body);
       return toResponse(await getSpace(repo(), spaceId, user.userId));
     } catch (err) {
       if (err instanceof SpaceNotFoundError) {
@@ -161,6 +199,11 @@ export async function spaceRoutes(app: FastifyInstance, opts: SpaceRouteOptions)
       }
       if (err instanceof DuplicateRoleKeyError) {
         return reply.code(422).send(apiError(request, 'DUPLICATE_ROLE_KEY', 'شناسهٔ نقش نباید تکراری باشد.'));
+      }
+      if (err instanceof SpaceEditRefusedError) {
+        // The published version is untouched; the message says why and the
+        // details cite any rule that matched.
+        return reply.code(422).send(apiError(request, 'SPACE_EDIT_REFUSED', err.reason, err.matchedPolicyRules));
       }
       throw err;
     }

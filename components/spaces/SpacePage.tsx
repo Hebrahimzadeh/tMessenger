@@ -19,6 +19,7 @@ import { PinnedCards } from './PinnedCards';
 import { SpaceHeader } from './SpaceHeader';
 import { SpaceFeed } from './SpaceFeed';
 import { SpaceHealthPanel } from './SpaceHealthPanel';
+import { SpaceEditForm } from './SpaceEditForm';
 
 type GateState =
   | { status: 'loading' }
@@ -40,6 +41,23 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SpaceSearchItem[] | null>(null);
+  const [editing, setEditing] = useState(false);
+  /** Set once, right after a space is built from a prompt and the person lands here. */
+  // Read once from the URL the composer redirected to. Safe to compute during
+  // the first render: nothing depending on it is shown until the space has
+  // loaded, so server and client markup agree.
+  const [builtNotice] = useState<{ outcome: 'published' | 'review'; aiWrote: boolean } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const built = params.get('built');
+    return built === 'published' || built === 'review' ? { outcome: built, aiWrote: params.get('ai') === '1' } : null;
+  });
+
+  useEffect(() => {
+    // A one-time notice: strip it from the address bar so a reload or a shared
+    // link does not repeat it forever.
+    if (builtNotice) window.history.replaceState(null, '', window.location.pathname);
+  }, [builtNotice]);
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +146,46 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
         status={space.status}
         isOwnerView={isOwnerView}
       />
+
+      {builtNotice && (
+        <div role="status" className="mx-4 mt-4 space-y-1 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+          <p>
+            {builtNotice.outcome === 'published'
+              ? 'بستر شما ساخته و منتشر شد. شما مدیر این بستر هستید و می‌توانید هر بخش آن را ویرایش کنید.'
+              : 'بستر شما ساخته شد و پس از نگاه یک نفر منتشر می‌شود. چیزی رد نشده است و تا آن زمان فقط خودتان آن را می‌بینید.'}
+          </p>
+          {!builtNotice.aiWrote && (
+            // Said out loud: a person acting on the design deserves to know a
+            // model did not write it.
+            <p className="text-xs text-green-700">این بستر بدون دستیار هوش مصنوعی و فقط بر پایهٔ قاعده‌ها ساخته شد.</p>
+          )}
+        </div>
+      )}
+
+      {/* Published spaces only. Editing one that is waiting for review would go
+          through the draft path and leave it with no way to be published. */}
+      {isOwnerView && space.status === 'PUBLISHED' && (
+        <section className="p-4">
+          {editing ? (
+            <SpaceEditForm
+              space={space}
+              onSaved={(updated) => {
+                setGate({ status: 'ready', space: updated });
+                setEditing(false);
+              }}
+              onCancel={() => setEditing(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="w-full rounded-xl border border-gray-300 p-3 text-sm font-medium text-gray-700"
+            >
+              ویرایش بستر
+            </button>
+          )}
+        </section>
+      )}
 
       {isOwnerView && (
         <section className="p-4">

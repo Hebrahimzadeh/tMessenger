@@ -26,6 +26,7 @@ import { spaceRoutes, type SpaceRouteOptions } from './modules/spaces/space.rout
 import { createSpaceCreationGate } from './modules/spaces/space-creation-gate';
 import { createPrismaPolicyRuleSource } from './modules/ai/capabilities/policy.repository';
 import { inferCard } from './modules/ai/capabilities/card-inference';
+import { buildSpace } from './modules/ai/capabilities/space-builder';
 import { storageRoutes, type StorageRouteOptions } from './modules/storage/storage.route';
 import { FakeStorageProvider } from './modules/storage/fake-storage-provider';
 import type { StorageProvider } from './modules/storage/storage-provider';
@@ -200,6 +201,10 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
       },
       { onFailure: (error) => app.log.error({ err: error }, 'space creation gate failed closed') }
     ),
+    spaceBuilder: {
+      build: (prompt, requesterId) =>
+        buildSpace({ orchestrator: resolvedOrchestrator, policy: createPrismaPolicyRuleSource(() => app.db) }, prompt, requesterId),
+    },
     ...spaces,
   });
   app.register(spaceSearchRoutes, {

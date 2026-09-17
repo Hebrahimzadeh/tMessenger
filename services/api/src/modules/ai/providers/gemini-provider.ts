@@ -75,7 +75,11 @@ export class GeminiProvider implements AiProvider {
           // Low temperature on purpose: every capability here produces
           // structured output a schema has to accept, and creativity in that
           // context is just a higher rejection rate.
-          generationConfig: { temperature: 0.2, maxOutputTokens: 1200, responseMimeType: 'application/json' },
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: input.maxOutputTokens ?? 1200,
+            responseMimeType: 'application/json',
+          },
         }),
       });
     } catch (err) {

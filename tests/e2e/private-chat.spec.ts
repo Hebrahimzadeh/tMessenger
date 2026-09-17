@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { loginViaDevOtp } from './helpers/dev-login';
+import { buildSpaceFromPrompt, LENDING_PROMPT } from './helpers/build-space';
 
 // Two real people in two independent browser contexts, talking over the real
 // socket. See auth.spec.ts's header for how to start the API this targets.
@@ -133,18 +134,10 @@ test('the assistant is marked a system account, can be muted and hidden, and pub
 test('a reservation opens the same direct room, and back returns to the card it came from', async ({ page, context }) => {
   // The reservation itself is covered by ladder-flow; this picks up at the
   // deep link, which is the part Task 21 adds.
-  await loginViaDevOtp(page, '/spaces/new');
+  await loginViaDevOtp(page, '/');
   const suffix = Math.floor(Math.random() * 1_000_000);
 
-  await page.getByLabel('عنوان بستر').fill(`بستر گفت‌وگو ${suffix}`);
-  await page.getByLabel('این بستر برای چیست؟').fill('این بستر برای هماهنگی داوطلبانه‌ی ابزار مشترک محله تشکیل شده است.');
-  await page.getByRole('button', { name: 'ادامه' }).click();
-  await page.getByLabel('روش‌های مشارکت (با ویرگول جدا کنید)').fill('حضوری');
-  await page.getByRole('button', { name: 'ادامه' }).click();
-  await page.getByRole('button', { name: 'انتشار' }).click();
-  const spaceHref = await page.getByRole('link', { name: 'مشاهدهٔ بستر' }).getAttribute('href');
-
-  await page.goto(spaceHref!);
+  await buildSpaceFromPrompt(page, `${LENDING_PROMPT} - گفت‌وگو ${suffix}`);
   await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
   await page.getByLabel('متن کارت').fill('نردبان قابل امانت برای کارهای محله. هر کس نیاز داشت رزرو کند.');
   await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
