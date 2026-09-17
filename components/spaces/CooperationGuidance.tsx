@@ -45,7 +45,7 @@ const DECISION_HEADLINE: Record<SpaceCreationGuidance['creationDecision'], strin
 
 const DECISION_DETAIL: Record<SpaceCreationGuidance['creationDecision'], string> = {
   ALLOW: 'هر پیشنهادی را که می‌پسندید نگه دارید و بقیه را رد کنید.',
-  REVISE: 'هیچ‌چیز رد نشده است؛ فقط چند بخش هنوز کامل نیست.',
+  REVISE: 'هیچ‌چیز رد نشده است. موارد زیر را کامل کنید تا بستر آمادهٔ انتشار شود.',
   HUMAN_REVIEW:
     'پیش‌نویس شما ذخیره شده و تا پایان بررسی به‌صورت عمومی منتشر نمی‌شود. این به معنای تخلف نیست؛ موضوع به تشخیص یک نفر نیاز دارد.',
   BLOCK: 'این بستر به این شکل منتشر نخواهد شد. قاعده‌ای که مطابقت دارد در پایین آمده است؛ می‌توانید متن را تغییر دهید و دوباره تلاش کنید.',
@@ -161,6 +161,7 @@ export function CooperationGuidance({ guidance, onApply, onEdit, busy = false }:
   const [acceptedTools, setAcceptedTools] = useState(() => allSelected(guidance.suggestedToolKeys.length));
 
   const blocked = guidance.creationDecision === 'BLOCK';
+  const needsRevision = guidance.creationDecision === 'REVISE';
 
   function handleApply() {
     onApply({
@@ -201,6 +202,39 @@ export function CooperationGuidance({ guidance, onApply, onEdit, busy = false }:
         </section>
       )}
 
+      {/* First, deliberately. On a REVISE this is the only section that
+          stands between the person and a published space, and it used to
+          sit below the assumptions, strengths, risks and questions - four
+          blocks of commentary before the one actionable thing. Somebody
+          reading top-down on a phone saw "complete a few things" and had
+          no idea which, which is exactly how you get stuck on a page that
+          is telling you nothing is wrong. */}
+      {!blocked && guidance.suggestedRevisions.length > 0 && (
+        <section aria-labelledby="guidance-revisions" className="space-y-2">
+          <h2 id="guidance-revisions" className="text-sm font-medium text-gray-700">
+            {needsRevision ? 'برای انتشار، این‌ها را کامل کنید' : 'تغییرهای پیشنهادی'}
+          </h2>
+          {guidance.suggestedRevisions.map((revision, index) => (
+            <div key={`${revision.field}-${index}`} className="space-y-2 rounded-xl border border-gray-200 p-3">
+              <Selectable
+                id={`revision-${index}`}
+                checked={acceptedRevisions.has(index)}
+                onChange={(next) => setAcceptedRevisions((s) => toggle(s, index, next))}
+              >
+                {revision.reason}
+              </Selectable>
+              <textarea
+                aria-label={`متن پیشنهادی ${index + 1}`}
+                value={revisions[index] ?? revision.value}
+                onChange={(e) => setRevisions((values) => values.map((v, i) => (i === index ? e.target.value : v)))}
+                rows={3}
+                className="w-full rounded-xl border border-gray-300 p-2 text-sm text-gray-900"
+              />
+            </div>
+          ))}
+        </section>
+      )}
+
       {guidance.assumptions.length > 0 && (
         <section aria-labelledby="guidance-assumptions" className="space-y-2">
           <h2 id="guidance-assumptions" className="text-sm font-medium text-gray-700">
@@ -237,32 +271,6 @@ export function CooperationGuidance({ guidance, onApply, onEdit, busy = false }:
                   <li key={question}>{question}</li>
                 ))}
               </ul>
-            </section>
-          )}
-
-          {guidance.suggestedRevisions.length > 0 && (
-            <section aria-labelledby="guidance-revisions" className="space-y-2">
-              <h2 id="guidance-revisions" className="text-sm font-medium text-gray-700">
-                تغییرهای پیشنهادی
-              </h2>
-              {guidance.suggestedRevisions.map((revision, index) => (
-                <div key={`${revision.field}-${index}`} className="space-y-2 rounded-xl border border-gray-200 p-3">
-                  <Selectable
-                    id={`revision-${index}`}
-                    checked={acceptedRevisions.has(index)}
-                    onChange={(next) => setAcceptedRevisions((s) => toggle(s, index, next))}
-                  >
-                    {revision.reason}
-                  </Selectable>
-                  <textarea
-                    aria-label={`متن پیشنهادی ${index + 1}`}
-                    value={revisions[index] ?? revision.value}
-                    onChange={(e) => setRevisions((values) => values.map((v, i) => (i === index ? e.target.value : v)))}
-                    rows={3}
-                    className="w-full rounded-xl border border-gray-300 p-2 text-sm text-gray-900"
-                  />
-                </div>
-              ))}
             </section>
           )}
 
@@ -364,7 +372,7 @@ export function CooperationGuidance({ guidance, onApply, onEdit, busy = false }:
             disabled={busy}
             className="flex-1 rounded-xl bg-blue-600 p-3 text-sm font-medium text-white disabled:opacity-50"
           >
-            اعمال موارد انتخاب‌شده
+            {needsRevision ? 'اعمال و بازگشت برای تکمیل' : 'اعمال موارد انتخاب‌شده'}
           </button>
         )}
       </div>

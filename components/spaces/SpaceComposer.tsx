@@ -127,7 +127,11 @@ export function SpaceComposer() {
     const supplementary = accepted.participationRoles.filter((role) => !role.isPrimary).map((role) => role.title);
     if (supplementary.length > 0) setSupplementaryRoles(supplementary);
 
-    setStep({ name: 'roles' });
+    // Land on the step that actually shows what just changed. A purpose
+    // revision applied while they were dropped on the roles step changed a
+    // field they could not see, which reads as nothing having happened.
+    const touchesDescribe = accepted.revisions.some((r) => r.field === 'title' || r.field === 'purpose');
+    setStep(touchesDescribe ? { name: 'describe' } : { name: 'roles' });
   }
 
   async function handlePublish() {
@@ -238,6 +242,10 @@ export function SpaceComposer() {
             <label htmlFor="participation-methods" className="mb-1 block text-sm font-medium text-gray-700">
               روش‌های مشارکت (با ویرگول جدا کنید)
             </label>
+            {/* The single most common reason a space comes back as REVISE.
+                Saying it here costs one line and saves a round trip through
+                the review screen. */}
+            <p className="mb-1 text-xs text-gray-500">دست‌کم یک روش لازم است تا بستر قابل انتشار شود. مثلاً «حضوری».</p>
             <input
               id="participation-methods"
               type="text"
@@ -301,6 +309,20 @@ export function SpaceComposer() {
 
         {step.guidance ? (
           <div className="space-y-4">
+            {/* Above the guidance, not below it. The panel runs to several
+                screens on a phone, and burying the one button that finishes
+                the job under all of it means the most prominent control on
+                screen is "اعمال موارد انتخاب‌شده", which goes backwards. */}
+            {step.verdict === 'ALLOW' && (
+              <button
+                type="button"
+                onClick={handlePublish}
+                disabled={submitting}
+                className="w-full rounded-xl bg-blue-600 p-3 font-medium text-white disabled:opacity-50"
+              >
+                انتشار بستر
+              </button>
+            )}
             <CooperationGuidance
               guidance={step.guidance}
               onApply={applyAccepted}
@@ -314,7 +336,7 @@ export function SpaceComposer() {
                 disabled={submitting}
                 className="w-full rounded-xl bg-blue-600 p-3 font-medium text-white disabled:opacity-50"
               >
-                انتشار
+                انتشار بستر
               </button>
             )}
           </div>

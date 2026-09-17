@@ -56,6 +56,34 @@ describe('the four decisions', () => {
     expect(screen.getByText('توضیح هدف را کامل‌تر بنویسید.')).toBeInTheDocument();
   });
 
+  it('REVISE puts what is missing first, above every other section', () => {
+    const { container } = render(
+      <CooperationGuidance guidance={guidance({ creationDecision: 'REVISE' })} onApply={vi.fn()} onEdit={vi.fn()} />
+    );
+
+    // The regression this guards: the list of gaps used to sit below the
+    // assumptions, strengths, risks and questions, so someone reading
+    // top-down on a phone saw "complete a few things" and four blocks of
+    // commentary, with no way to tell what was actually missing.
+    const text = container.textContent ?? '';
+    const gaps = text.indexOf('برای انتشار، این‌ها را کامل کنید');
+    expect(gaps).toBeGreaterThan(-1);
+    for (const later of ['چیزهایی که فرض شد', 'نقاط قوت', 'ریسک‌ها', 'پرسش‌هایی که بهتر است پاسخ دهید']) {
+      expect(text.indexOf(later), later).toBeGreaterThan(gaps);
+    }
+  });
+
+  it('REVISE says where its own button takes you, because it leaves the screen', () => {
+    renderGuidance({ creationDecision: 'REVISE' });
+    expect(screen.getByRole('button', { name: 'اعمال و بازگشت برای تکمیل' })).toBeInTheDocument();
+  });
+
+  it('keeps the neutral wording when nothing is actually missing', () => {
+    renderGuidance({ creationDecision: 'ALLOW' });
+    expect(screen.getByText('تغییرهای پیشنهادی')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'اعمال موارد انتخاب‌شده' })).toBeInTheDocument();
+  });
+
   it('HUMAN_REVIEW says a person is looking, and says it is not a violation', () => {
     renderGuidance({ creationDecision: 'HUMAN_REVIEW', safetyLevel: 'REVIEW' });
 

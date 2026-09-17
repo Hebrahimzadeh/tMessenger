@@ -159,7 +159,7 @@ describe('SpaceComposer: roles step', () => {
 
     await user.click(screen.getByRole('button', { name: 'ادامه' }));
 
-    expect(await screen.findByRole('button', { name: 'انتشار' })).toBeInTheDocument();
+    expect((await screen.findAllByRole('button', { name: 'انتشار بستر' }))[0]).toBeInTheDocument();
   });
 
   it('shows a validation error when a primary role is cleared', async () => {
@@ -200,10 +200,10 @@ describe('SpaceComposer: review step (the four precheck outcomes)', () => {
   it('ALLOW: publish button works and shows the published state with a link', async () => {
     const user = userEvent.setup();
     await getToReviewStep(user, 'ALLOW', 'بستر با معیارهای پایه مطابقت دارد.');
-    await screen.findByRole('button', { name: 'انتشار' });
+    await screen.findAllByRole('button', { name: 'انتشار بستر' });
 
     mockFetchByUrl({ '/publish': { status: 'PUBLISHED', publishedAt: '2026-09-06T00:00:00.000Z' } });
-    await user.click(screen.getByRole('button', { name: 'انتشار' }));
+    await user.click(screen.getAllByRole('button', { name: 'انتشار بستر' })[0]!);
 
     expect(await screen.findByText(/منتشر شد/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /مشاهدهٔ بستر/ })).toHaveAttribute('href', '/spaces/baagh-mahalle');
@@ -215,7 +215,7 @@ describe('SpaceComposer: review step (the four precheck outcomes)', () => {
 
     expect(await screen.findByText('توضیح هدف را کامل‌تر بنویسید.')).toBeInTheDocument();
     expect(screen.getByLabelText('متن پیشنهادی 1')).toHaveValue('متن کامل‌تر برای هدف');
-    expect(screen.queryByRole('button', { name: 'انتشار' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'انتشار بستر' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /ویرایش/ })).toBeInTheDocument();
   });
 
@@ -224,12 +224,11 @@ describe('SpaceComposer: review step (the four precheck outcomes)', () => {
     await getToReviewStep(user, 'REVISE', 'برای ادامه، چند مورد را کامل کنید.');
     await screen.findByText('توضیح هدف را کامل‌تر بنویسید.');
 
-    await user.click(screen.getByRole('button', { name: 'اعمال موارد انتخاب‌شده' }));
+    await user.click(screen.getByRole('button', { name: 'اعمال و بازگشت برای تکمیل' }));
 
-    // Back in their own form, with the accepted roles in the fields - so they
-    // read them before they become their space.
-    expect(await screen.findByLabelText('نقش اصلی اول')).toHaveValue('هماهنگ‌کننده');
-    expect(screen.getByLabelText('نقش اصلی دوم')).toHaveValue('مشارکت‌کننده');
+    // The accepted revision was for the purpose, which lives on the describe
+    // step - so that is where they land, looking at the field that changed.
+    expect(await screen.findByLabelText('این بستر برای چیست؟')).toHaveValue('متن کامل‌تر برای هدف');
   });
 
   it('HUMAN_REVIEW: says a person is looking and that it is not a violation, no publish button', async () => {
@@ -238,7 +237,7 @@ describe('SpaceComposer: review step (the four precheck outcomes)', () => {
 
     expect(await screen.findByText(/یک نفر این درخواست را بررسی می‌کند/)).toBeInTheDocument();
     expect(screen.getByText(/این به معنای تخلف نیست/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'انتشار' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'انتشار بستر' })).not.toBeInTheDocument();
   });
 
   it('BLOCK: cites the rule, states no public page will be created, no publish button', async () => {
@@ -247,7 +246,7 @@ describe('SpaceComposer: review step (the four precheck outcomes)', () => {
 
     expect(await screen.findByText('gambling@v1 — قانون مجازات اسلامی')).toBeInTheDocument();
     expect(screen.getByText(/منتشر نخواهد شد/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'انتشار' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'انتشار بستر' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'اعمال موارد انتخاب‌شده' })).not.toBeInTheDocument();
   });
 
@@ -261,7 +260,7 @@ describe('SpaceComposer: review step (the four precheck outcomes)', () => {
     );
 
     expect(await screen.findByText(/بررسی خودکار در دسترس نبود/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'انتشار' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'انتشار بستر' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'بازگشت و ویرایش' })).toBeInTheDocument();
   });
 });
