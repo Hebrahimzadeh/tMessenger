@@ -1,5 +1,5 @@
 import type { CardAttachmentKind, CardAttachmentStatus, CardKind, CardStatus, SpaceStatus } from '@taavon/database';
-import type { CardLinkInput, CardLocationInput } from '@taavon/contracts';
+import type { CardInference, CardLinkInput, CardLocationInput, ConfirmedInference } from '@taavon/contracts';
 import { deriveTitle } from './card-state-machine';
 import { inferCardKind } from './card-kind-inference';
 import { rankCards, type SpaceHealthStatusForRanking } from './card-ranking';
@@ -88,10 +88,33 @@ export interface CreateCardInput {
   attachmentIds: string[];
   links: CardLinkInput[];
   locations: CardLocationInput[];
+  /** Present only when the person previewed an inference and kept it. */
+  confirmedInference?: ConfirmedInference;
+}
+
+export interface SpaceProtocolRecord {
+  cardHints: { title: string; description?: string }[];
+  roleTitles: string[];
+}
+
+/**
+ * The inference, as the card module sees it.
+ *
+ * A port rather than a direct import of the AI capability, for the same
+ * reason the space-creation gate is one: this module should depend on the
+ * shape of an answer, not on where it comes from.
+ */
+export interface CardInferencePort {
+  infer(
+    input: { body: string; title?: string; protocol?: SpaceProtocolRecord },
+    requesterId: string | null
+  ): Promise<CardInference>;
 }
 
 export interface CardRepository {
   getSpaceStatus(spaceId: string): Promise<SpaceStatus | null>;
+  /** The space's own example templates and role titles - the protocol a draft should stay inside. */
+  getSpaceProtocol(spaceId: string): Promise<SpaceProtocolRecord | null>;
   /** Attachments referenced by id at create/update time - the service checks each is the caller's, READY, and unlinked. */
   findAttachmentsByIds(ids: string[]): Promise<CardAttachmentRecord[]>;
   createCard(input: {
@@ -173,7 +196,11 @@ export async function createCard(
   const fileAttachmentIds = await resolveFileAttachments(repo, input.attachmentIds, input.authorId);
   assertHasContent({ body: input.body, fileCount: fileAttachmentIds.length, links: input.links, locations: input.locations });
 
-  const { inferredKind, confidence } = inferCardKind(input.body);
+  // What the person confirmed after previewing, when they previewed at all.
+  // Falling back to the offline classifier is what keeps every caller that
+  // never asks for a suggestion - and the whole composer with the model
+  // switched off - working exactly as before.
+  const { inferredKind, confidence } = input.confirmedInference ?? inferCardKind(input.body);
 
   return repo.createCard({
     spaceId: input.spaceId,
@@ -245,6 +272,28 @@ export async function updateCard(
  * response: the route only renders READY attachments and only mints a
  * signed URL for one with an object key.
  */
+/**
+ * Proposes how a piece of text would behave as a card, before any card
+ * exists.
+ *
+ * Nothing is written. The person previews the answer, takes the parts they
+ * agree with, and creates the card themselves - "preview/confirm اجباری".
+ * The space must be accepting cards, checked here rather than trusted from
+ * the caller, so this cannot be used to probe a draft or archived space.
+ */
+export async function inferCardDraft(
+  repo: CardRepository,
+  port: CardInferencePort,
+  input: { spaceId: string; body: string; title?: string; requesterId: string | null }
+): Promise<CardInference> {
+  const spaceStatus = await repo.getSpaceStatus(input.spaceId);
+  if (spaceStatus === null) throw new SpaceNotFoundForCardError();
+  if (spaceStatus !== 'PUBLISHED') throw new SpaceNotAcceptingCardsError(spaceStatus);
+
+  const protocol = (await repo.getSpaceProtocol(input.spaceId)) ?? undefined;
+  return port.infer({ body: input.body, title: input.title, protocol }, input.requesterId);
+}
+
 export async function getCard(repo: CardRepository, cardId: string): Promise<CardRecord> {
   const card = await repo.findCard(cardId);
   if (!card || card.status === 'REMOVED') throw new CardNotFoundError();

@@ -1,11 +1,12 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import type { CardResponse } from '@taavon/contracts';
-import { cardResponseSchema } from '@taavon/contracts';
+import type { CardInference, CardKindContract, CardResponse } from '@taavon/contracts';
+import { cardInferenceSchema, cardResponseSchema } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { deriveTitlePreview } from '@/lib/derive-title';
 import { CardAttachmentPicker } from './CardAttachmentPicker';
+import { CardInferencePreview, KIND_LABELS, type AcceptedInference } from './CardInferencePreview';
 
 export interface CardComposerProps {
   spaceId: string;
@@ -18,12 +19,16 @@ export interface CardComposerProps {
 /**
  * "composer را تک‌ورودی و preview-first بساز؛ انتخاب kind اجباری نباشد" -
  * one primary text field (the title is an optional, collapsed extra), no
- * kind selector anywhere (the API defaults it to AWARENESS and infers a
- * guess on its own), and a live preview of the card as it will actually
- * look renders as soon as there is anything to preview. "متن کلی را نیز
- * قابل ارسال نگه دار" - completely generic, unstructured text is always a
- * valid submission; the preview here is the plain rule-based derivation
- * (`deriveTitlePreview`), not any AI generation (Task 25).
+ * kind selector in the way, and a live preview of the card as it will
+ * actually look. "متن کلی را نیز قابل ارسال نگه دار" - completely generic,
+ * unstructured text is always a valid submission.
+ *
+ * Task 25 adds a suggestion, and adds it as an offer rather than a step.
+ * Asking for one is a button nobody has to press; what comes back is
+ * previewed and confirmed piece by piece before any of it becomes the card;
+ * and submitting without ever asking is the same single click it always was.
+ * That is what keeps the composer identical when the model is off - there is
+ * no path through here that waits on it.
  */
 export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: CardComposerProps) {
   const [title, setTitle] = useState('');
@@ -31,11 +36,46 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inference, setInference] = useState<CardInference | null>(null);
+  const [inferring, setInferring] = useState(false);
+  /** Only set once the person has accepted a kind. Absent means they never did. */
+  const [kind, setKind] = useState<CardKindContract | null>(null);
+  const [confirmedInference, setConfirmedInference] = useState<AcceptedInference['confirmedInference']>(undefined);
 
   const trimmedBody = body.trim();
   const hasContent = trimmedBody.length > 0 || attachmentIds.length > 0;
   const canSubmit = hasContent && !submitting;
   const previewTitle = deriveTitlePreview(title, body);
+
+  async function handleSuggest() {
+    if (trimmedBody.length === 0 || inferring) return;
+    setInferring(true);
+    setError(null);
+    try {
+      setInference(
+        cardInferenceSchema.parse(
+          await apiFetch(`/spaces/${spaceId}/cards/infer`, {
+            method: 'POST',
+            body: JSON.stringify({ body: trimmedBody, ...(title.trim() ? { title: title.trim() } : {}) }),
+          })
+        )
+      );
+    } catch {
+      // A suggestion nobody asked to depend on. If it cannot be fetched the
+      // composer says so quietly and the card is still one click away.
+      setError('پیشنهاد در دسترس نیست. می‌توانید کارت را همان‌طور که نوشته‌اید ثبت کنید.');
+    } finally {
+      setInferring(false);
+    }
+  }
+
+  function applyInference(accepted: AcceptedInference) {
+    if (accepted.title !== undefined) setTitle(accepted.title);
+    if (accepted.body !== undefined) setBody(accepted.body);
+    if (accepted.kind !== undefined) setKind(accepted.kind);
+    setConfirmedInference(accepted.confirmedInference);
+    setInference(null);
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -50,6 +90,8 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
           body: JSON.stringify({
             body: trimmedBody,
             ...(title.trim() ? { title: title.trim() } : {}),
+            ...(kind ? { kind } : {}),
+            ...(confirmedInference ? { confirmedInference } : {}),
             attachmentIds,
           }),
         })
@@ -93,9 +135,25 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
 
       <CardAttachmentPicker onChange={setAttachmentIds} disabled={submitting} />
 
+      {inference ? (
+        <CardInferencePreview inference={inference} onApply={applyInference} onDismiss={() => setInference(null)} />
+      ) : (
+        trimmedBody.length > 0 && (
+          <button
+            type="button"
+            onClick={handleSuggest}
+            disabled={inferring || submitting}
+            className="text-sm font-medium text-blue-600 disabled:opacity-50"
+          >
+            {inferring ? 'در حال آماده‌سازی پیشنهاد...' : 'پیشنهاد برای این متن'}
+          </button>
+        )
+      )}
+
       {hasContent && (
         <div className="rounded-xl border border-dashed border-gray-300 p-3">
           <p className="mb-1 text-xs font-medium text-gray-400">پیش‌نمایش کارت</p>
+          {kind && <p className="mb-1 text-xs text-blue-700">{KIND_LABELS[kind]}</p>}
           <p className="font-medium text-gray-900">{previewTitle}</p>
           {trimmedBody && <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">{body}</p>}
         </div>

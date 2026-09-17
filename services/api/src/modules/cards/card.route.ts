@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  cardInferenceSchema,
   cardListResponseSchema,
   cardResponseSchema,
   createCardBodySchema,
+  inferCardBodySchema,
   finalizeAttachmentResponseSchema,
   updateCardBodySchema,
   uploadIntentBodySchema,
@@ -24,6 +26,7 @@ import {
   createCard,
   CardNotFoundError,
   getCard,
+  inferCardDraft,
   InvalidAttachmentReferenceError,
   InvalidCardCursorError,
   listCards,
@@ -31,15 +34,21 @@ import {
   SpaceNotAcceptingCardsError,
   SpaceNotFoundForCardError,
   updateCard,
+  type CardInferencePort,
   type CardRecord,
   type CardRepository,
 } from './card.service';
+import { inferCard } from '../ai/capabilities/card-inference';
+import { AiOrchestrator } from '../ai/orchestrator';
+import { createPrismaOrchestratorRepository } from '../ai/ai.repository';
 
 export interface CardRouteOptions {
   sessionHmacKey: string;
   storageProvider: StorageProvider;
   cardRepository?: CardRepository;
   attachmentRepository?: AttachmentRepository;
+  /** Normally supplied by `buildApp`, which shares one orchestrator across every AI-backed route. */
+  cardInferencePort?: CardInferencePort;
 }
 
 const LIST_PAGE_SIZE = 20;
@@ -90,6 +99,45 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
   function attachmentRepo(): AttachmentRepository {
     return opts.attachmentRepository ?? createPrismaAttachmentRepository(app.db);
   }
+  // The fallback lets this module be registered on its own without the
+  // caller assembling an orchestrator. It has no provider, which costs only
+  // the creative half: the kind, the pattern and the questions are decided
+  // by rules either way.
+  function inferencePort(): CardInferencePort {
+    if (opts.cardInferencePort) return opts.cardInferencePort;
+    const orchestrator = new AiOrchestrator({
+      provider: null,
+      repository: createPrismaOrchestratorRepository(() => app.db),
+      dailyBudgetMicros: null,
+    });
+    return { infer: (input, requesterId) => inferCard({ orchestrator }, input, requesterId) };
+  }
+
+  /**
+   * Proposes a kind, a behaviour and a draft for text that is not a card yet.
+   *
+   * Writes nothing. It exists so the person can look at a suggestion before
+   * it becomes theirs, and every field it returns is one they can edit or
+   * ignore on the way to `POST /spaces/:spaceId/cards`.
+   */
+  app.post('/spaces/:spaceId/cards/infer', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const { spaceId } = request.params as { spaceId: string };
+    const body = inferCardBodySchema.parse(request.body);
+
+    try {
+      const inference = await inferCardDraft(repo(), inferencePort(), {
+        spaceId,
+        body: body.body,
+        title: body.title,
+        requesterId: user.userId,
+      });
+      return cardInferenceSchema.parse(inference);
+    } catch (err) {
+      return handleCardWriteError(err, request, reply);
+    }
+  });
 
   app.post('/spaces/:spaceId/cards', async (request, reply) => {
     const user = requireSession(request, reply, opts.sessionHmacKey);
@@ -107,6 +155,7 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
         attachmentIds: body.attachmentIds,
         links: body.links,
         locations: body.locations,
+        confirmedInference: body.confirmedInference,
       });
       const card = await repo().findCard(id);
       return reply.code(201).send(await toCardResponse(card!, opts.storageProvider));

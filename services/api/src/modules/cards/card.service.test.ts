@@ -32,6 +32,12 @@ interface FakeCard {
 
 function fakeCardRepo(opts: { spaceStatus?: SpaceStatus } = {}) {
   const spaceStatus: SpaceStatus = opts.spaceStatus ?? 'PUBLISHED';
+  /** The space's own examples and roles, as the inference would see them. */
+  const spaceProtocol = {
+    cardHints: [{ title: 'نمونه: اعلام آمادگی', description: 'من می‌توانم کمک کنم.' }],
+    roleTitles: ['هماهنگ‌کننده', 'مشارکت‌کننده'],
+  };
+
   const cards = new Map<string, FakeCard>();
   const attachments = new Map<string, CardAttachmentRecord>();
   let clock = Date.parse('2026-09-10T08:00:00.000Z');
@@ -74,6 +80,9 @@ function fakeCardRepo(opts: { spaceStatus?: SpaceStatus } = {}) {
   const repo: CardRepository = {
     async getSpaceStatus(spaceId) {
       return spaceId === SPACE ? spaceStatus : null;
+    },
+    async getSpaceProtocol(spaceId) {
+      return spaceId === SPACE ? spaceProtocol : null;
     },
     async findAttachmentsByIds(ids) {
       return ids.map((id) => attachments.get(id)).filter((a): a is CardAttachmentRecord => a !== undefined);

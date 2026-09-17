@@ -10,7 +10,10 @@ import { FakeStorageProvider } from '../storage/fake-storage-provider';
 import { storageRoutes } from '../storage/storage.route';
 import { cardRoutes } from './card.route';
 import type { AttachmentRecord, AttachmentRepository } from './attachment.service';
-import type { CardAttachmentRecord, CardRecord, CardRepository } from './card.service';
+import type { CardAttachmentRecord, CardInferencePort, CardRecord, CardRepository } from './card.service';
+import { inferCard } from '../ai/capabilities/card-inference';
+import { AiOrchestrator } from '../ai/orchestrator';
+import { noopOrchestratorRepository } from '../ai/capabilities/policy.fixtures';
 import { inferCardKind } from './card-kind-inference';
 import { deriveTitle } from './card-state-machine';
 
@@ -21,6 +24,12 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0
 const MP3 = Buffer.from('ID3\x03\x00\x00\x00');
 
 function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
+  /** The space's own examples and roles, as the inference would see them. */
+  const spaceProtocol = {
+    cardHints: [{ title: 'نمونه: اعلام آمادگی', description: 'من می‌توانم کمک کنم.' }],
+    roleTitles: ['هماهنگ‌کننده', 'مشارکت‌کننده'],
+  };
+
   const SPACE = randomUUID();
   const cards = new Map<string, { record: CardRecord; revisions: { revisionNumber: number; title: string; body: string }[] }>();
   const attachments = new Map<
@@ -59,6 +68,9 @@ function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
   const cardRepo: CardRepository = {
     async getSpaceStatus(spaceId) {
       return spaceId === SPACE ? spaceStatus : null;
+    },
+    async getSpaceProtocol(spaceId) {
+      return spaceId === SPACE ? spaceProtocol : null;
     },
     async findAttachmentsByIds(ids) {
       return ids
@@ -185,13 +197,14 @@ function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
     },
   };
 
-  return { SPACE, cardRepo, attachmentRepo, attachments };
+  return { SPACE, cardRepo, attachmentRepo, attachments, spaceProtocol };
 }
 
 function buildApp(overrides: {
   cardRepo: CardRepository;
   attachmentRepo: AttachmentRepository;
   storage?: FakeStorageProvider;
+  cardInferencePort?: CardInferencePort;
 }) {
   const storage = overrides.storage ?? new FakeStorageProvider();
   const app = Fastify();
@@ -209,6 +222,24 @@ function buildApp(overrides: {
     storageProvider: storage,
     cardRepository: overrides.cardRepo,
     attachmentRepository: overrides.attachmentRepo,
+    // The real capability with no model behind it: the kind, the pattern and
+    // the questions come from rules, so a route test exercises the same
+    // answers production produces with the provider unavailable.
+    cardInferencePort:
+      overrides.cardInferencePort ?? {
+        infer: (input, requesterId) =>
+          inferCard(
+            {
+              orchestrator: new AiOrchestrator({
+                provider: null,
+                repository: noopOrchestratorRepository(),
+                dailyBudgetMicros: null,
+              }),
+            },
+            input,
+            requesterId
+          ),
+      },
   });
   app.register(storageRoutes, {
     prefix: '/v1/storage',
@@ -449,6 +480,142 @@ describe('GET /v1/spaces/:spaceId/cards', () => {
     expect(page1.statusCode).toBe(200);
     expect(page1.json().items).toHaveLength(3);
     expect(page1.json().nextCursor).toBeNull();
+    await app.close();
+  });
+});
+
+describe('POST /v1/spaces/:spaceId/cards/infer', () => {
+  it('requires a session', async () => {
+    const { SPACE, cardRepo, attachmentRepo } = fakeRepos();
+    const { app } = buildApp({ cardRepo, attachmentRepo });
+    const res = await app.inject({ method: 'POST', url: `/v1/spaces/${SPACE}/cards/infer`, payload: { body: 'x' } });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('proposes a kind, a behaviour and a draft without creating anything', async () => {
+    const { SPACE, cardRepo, attachmentRepo } = fakeRepos();
+    const { app } = buildApp({ cardRepo, attachmentRepo });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/spaces/${SPACE}/cards/infer`,
+      cookies: cookieFor(USER_1),
+      payload: { body: 'یک نردبان دارم که می‌توانم قرض بدهم.' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      kind: 'REUSABLE_RESOURCE',
+      operationalPattern: { reservable: true, terminalCloseAfterUse: true },
+      creativityApplied: false,
+    });
+
+    // Nothing was written: the list is still empty.
+    const list = await app.inject({ method: 'GET', url: `/v1/spaces/${SPACE}/cards` });
+    expect(list.json().items).toEqual([]);
+    await app.close();
+  });
+
+  it('passes the space\'s own examples and roles to the inference', async () => {
+    const { SPACE, cardRepo, attachmentRepo, spaceProtocol } = fakeRepos();
+    const seen: unknown[] = [];
+    const { app } = buildApp({
+      cardRepo,
+      attachmentRepo,
+      cardInferencePort: {
+        infer: async (input) => {
+          seen.push(input.protocol);
+          return inferCard(
+            { orchestrator: new AiOrchestrator({ provider: null, repository: noopOrchestratorRepository(), dailyBudgetMicros: null }) },
+            input,
+            null
+          );
+        },
+      },
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/spaces/${SPACE}/cards/infer`,
+      cookies: cookieFor(USER_1),
+      payload: { body: 'چیزی دارم' },
+    });
+
+    expect(seen[0]).toEqual(spaceProtocol);
+    await app.close();
+  });
+
+  it('refuses for a space that is not accepting cards', async () => {
+    const { SPACE, cardRepo, attachmentRepo } = fakeRepos('TEMPORARILY_SUSPENDED');
+    const { app } = buildApp({ cardRepo, attachmentRepo });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/spaces/${SPACE}/cards/infer`,
+      cookies: cookieFor(USER_1),
+      payload: { body: 'نردبان قرض می‌دهم' },
+    });
+
+    // A suspended space must not be probeable through a side door.
+    expect(res.statusCode).toBe(422);
+    await app.close();
+  });
+
+  it('rejects an empty body rather than inferring from nothing', async () => {
+    const { SPACE, cardRepo, attachmentRepo } = fakeRepos();
+    const { app } = buildApp({ cardRepo, attachmentRepo });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/spaces/${SPACE}/cards/infer`,
+      cookies: cookieFor(USER_1),
+      payload: { body: '   ' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('the confirmed inference is what lands on the card', () => {
+  it('records what the person agreed to, not a second guess', async () => {
+    const { SPACE, cardRepo, attachmentRepo } = fakeRepos();
+    const { app } = buildApp({ cardRepo, attachmentRepo });
+
+    // The body reads as an ordinary awareness note; the person says it is a
+    // service, and that is what the profile has to carry.
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/spaces/${SPACE}/cards`,
+      cookies: cookieFor(USER_1),
+      payload: {
+        body: 'چیزی دارم که شاید به درد بخورد',
+        kind: 'SERVICE',
+        confirmedInference: { inferredKind: 'SERVICE', confidence: 0.9 },
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ kind: 'SERVICE', inferredKind: 'SERVICE' });
+    await app.close();
+  });
+
+  it('falls back to the server\'s own classifier when nobody previewed', async () => {
+    const { SPACE, cardRepo, attachmentRepo } = fakeRepos();
+    const { app } = buildApp({ cardRepo, attachmentRepo });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/spaces/${SPACE}/cards`,
+      cookies: cookieFor(USER_1),
+      payload: { body: 'چیزی دارم که شاید به درد بخورد' },
+    });
+
+    // Publishing without ever asking for a suggestion is the ordinary path,
+    // not a degraded one.
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ kind: 'AWARENESS', inferredKind: 'AWARENESS' });
     await app.close();
   });
 });

@@ -113,6 +113,31 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
       return space?.status ?? null;
     },
 
+    async getSpaceProtocol(spaceId) {
+      const space = await prisma.space.findUnique({
+        where: { id: spaceId },
+        select: {
+          definitionVersions: { orderBy: { versionNumber: 'desc' }, take: 1, select: { cardHints: true } },
+          participationRoles: { select: { title: true } },
+        },
+      });
+      if (!space) return null;
+
+      // `cardHints` is descriptive JSON on the definition, so it is read
+      // defensively rather than trusted to have a shape: a hint that does not
+      // look like one is dropped instead of reaching a prompt as `undefined`.
+      const raw = space.definitionVersions[0]?.cardHints;
+      const hints = Array.isArray(raw) ? raw : [];
+      const cardHints = hints.flatMap((hint) => {
+        if (typeof hint !== 'object' || hint === null) return [];
+        const { title, description } = hint as { title?: unknown; description?: unknown };
+        if (typeof title !== 'string' || title.length === 0) return [];
+        return [{ title, ...(typeof description === 'string' ? { description } : {}) }];
+      });
+
+      return { cardHints, roleTitles: space.participationRoles.map((role) => role.title) };
+    },
+
     async findAttachmentsByIds(ids) {
       if (ids.length === 0) return [];
       const rows = await prisma.cardAttachment.findMany({ where: { id: { in: ids } } });

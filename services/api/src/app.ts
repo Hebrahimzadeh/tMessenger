@@ -25,6 +25,7 @@ import { spaceSearchRoutes, type SpaceSearchRouteOptions } from './modules/space
 import { spaceRoutes, type SpaceRouteOptions } from './modules/spaces/space.route';
 import { createSpaceCreationGate } from './modules/spaces/space-creation-gate';
 import { createPrismaPolicyRuleSource } from './modules/ai/capabilities/policy.repository';
+import { inferCard } from './modules/ai/capabilities/card-inference';
 import { storageRoutes, type StorageRouteOptions } from './modules/storage/storage.route';
 import { FakeStorageProvider } from './modules/storage/fake-storage-provider';
 import type { StorageProvider } from './modules/storage/storage-provider';
@@ -210,6 +211,9 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
     prefix: '/v1',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
     storageProvider: resolvedStorageProvider,
+    cardInferencePort: {
+      infer: (input, requesterId) => inferCard({ orchestrator: resolvedOrchestrator }, input, requesterId),
+    },
     ...cards,
   });
   app.register(publicCommentRoutes, {

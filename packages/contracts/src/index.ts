@@ -12,6 +12,7 @@ export * from './pagination';
 export * from './role';
 export * from './space';
 export * from './card';
+export * from './card-inference';
 export * from './public-comment';
 export * from './messaging';
 export * from './notification';

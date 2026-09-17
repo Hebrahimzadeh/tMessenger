@@ -92,3 +92,89 @@ test('two users take a REUSABLE_RESOURCE card through the full ladder: create, p
   await page.goto(spaceUrl);
   await expect(page.getByText(/منقضی/)).toHaveCount(0);
 });
+
+
+test('the ladder is inferred as something to lend, and says its close is final before it is posted', async ({ page }) => {
+  await loginViaDevOtp(page, '/spaces/new');
+  const spaceUrl = await createAndPublishSpace(page, `امانات ابزار ${Math.floor(Math.random() * 1_000_000)}`);
+
+  await page.goto(spaceUrl);
+  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByLabel('متن کارت').fill('یک نردبان دارم که می‌توانم قرض بدهم. هر وقت لازم داشتید خبر بدهید.');
+
+  await page.getByRole('button', { name: 'پیشنهاد برای این متن' }).click();
+  await expect(page.getByText('پیشنهاد برای این کارت')).toBeVisible();
+
+  // The plan's own example: lent, returned, and the card is finished when
+  // the lending is.
+  await expect(page.getByLabel('نوع کارت')).toHaveValue('REUSABLE_RESOURCE');
+  await expect(page.getByText(/بستن آن نهایی است/)).toBeVisible();
+  await expect(page.getByText('بعد از استفاده باید به شما برگردانده شود؟')).toBeVisible();
+
+  await page.getByRole('button', { name: 'اعمال موارد انتخاب‌شده' }).click();
+  await expect(page.getByText('چیزی برای امانت')).toBeVisible();
+
+  await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
+  await page.waitForURL((url) => /^\/cards\//.test(url.pathname));
+});
+
+test('a suggested kind can be corrected before the card exists', async ({ page }) => {
+  await loginViaDevOtp(page, '/spaces/new');
+  const spaceUrl = await createAndPublishSpace(page, `کارگاه محله ${Math.floor(Math.random() * 1_000_000)}`);
+
+  await page.goto(spaceUrl);
+  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByLabel('متن کارت').fill('یک نردبان دارم که می‌توانم قرض بدهم.');
+  await page.getByRole('button', { name: 'پیشنهاد برای این متن' }).click();
+  await expect(page.getByText('پیشنهاد برای این کارت')).toBeVisible();
+
+  // They know better than the classifier, and the behaviour shown updates to
+  // match what they chose rather than what was proposed.
+  await page.getByLabel('نوع کارت').selectOption('PARTICIPATION');
+  await expect(page.getByText(/رزرو نمی‌شود/)).toBeVisible();
+
+  await page.getByRole('button', { name: 'اعمال موارد انتخاب‌شده' }).click();
+  await expect(page.getByText('دعوت به مشارکت')).toBeVisible();
+
+  await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
+  await page.waitForURL((url) => /^\/cards\//.test(url.pathname));
+});
+
+test('with the suggestion unavailable, a card is still one click away', async ({ page }) => {
+  // The AI-off case the plan asks for. The server half is unit-tested (no
+  // provider, a timeout, a refusal and a wrong-shaped answer all produce the
+  // same kind and pattern); what only a browser can show is that the person
+  // is not blocked, so the endpoint is failed outright here.
+  await page.route('**/v1/spaces/*/cards/infer', (route) => route.abort('failed'));
+
+  await loginViaDevOtp(page, '/spaces/new');
+  const spaceUrl = await createAndPublishSpace(page, `بستر بی‌دستیار ${Math.floor(Math.random() * 1_000_000)}`);
+
+  await page.goto(spaceUrl);
+  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByLabel('متن کارت').fill('یه چیزی برای کمک دارم');
+
+  await page.getByRole('button', { name: 'پیشنهاد برای این متن' }).click();
+  await expect(page.getByText(/همان‌طور که نوشته‌اید ثبت کنید/)).toBeVisible();
+
+  // And the card goes out anyway, with a title from the first line.
+  await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
+  await page.waitForURL((url) => /^\/cards\//.test(url.pathname));
+  await expect(page.getByRole('heading', { name: 'یه چیزی برای کمک دارم' })).toBeVisible();
+});
+
+test('a generic sentence publishes without ever asking for a suggestion', async ({ page }) => {
+  await loginViaDevOtp(page, '/spaces/new');
+  const spaceUrl = await createAndPublishSpace(page, `بستر ساده ${Math.floor(Math.random() * 1_000_000)}`);
+
+  await page.goto(spaceUrl);
+  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByLabel('متن کارت').fill('یه خبر برای محله دارم که گفتنش بد نیست.');
+
+  // No kind selector stands between them and posting - "فرم نوع اجباری نیست".
+  await expect(page.getByLabel('نوع کارت')).toHaveCount(0);
+  await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
+
+  await page.waitForURL((url) => /^\/cards\//.test(url.pathname));
+  await expect(page.getByRole('heading', { name: 'یه خبر برای محله دارم که گفتنش بد نیست.' })).toBeVisible();
+});

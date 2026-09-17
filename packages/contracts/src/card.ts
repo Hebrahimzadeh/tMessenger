@@ -41,6 +41,26 @@ export const cardLocationInputSchema = z.object({
 });
 export type CardLocationInput = z.infer<typeof cardLocationInputSchema>;
 
+/**
+ * What the person confirmed after previewing an inference.
+ *
+ * Deliberately narrow: only the classification is carried, because the title
+ * and body they accepted are already in the ordinary create fields by then.
+ * This is what lands in `CardSemanticProfile` - "نتیجهٔ تأییدشده را به
+ * CardSemanticProfile وصل کن" - so the profile records what a person agreed
+ * to rather than what a keyword pass guessed a second time.
+ *
+ * It lives here rather than beside the rest of the inference contract so the
+ * dependency stays one-way: card-inference.ts needs `cardKindSchema`, and a
+ * cycle between two Zod modules leaves one of them holding `undefined` at
+ * evaluation time.
+ */
+export const confirmedInferenceSchema = z.object({
+  inferredKind: cardKindSchema,
+  confidence: z.number().min(0).max(1),
+});
+export type ConfirmedInference = z.infer<typeof confirmedInferenceSchema>;
+
 /** "متن تنها یا پیوست معنادار کافی" - a card needs *something*: body text, at least one finalized file attachment, a link, or a location. `kind` is never required ("user مجبور به انتخاب نیست"). */
 export const createCardBodySchema = z
   .object({
@@ -50,6 +70,15 @@ export const createCardBodySchema = z
     attachmentIds: z.array(z.string().uuid()).max(20).default([]),
     links: z.array(cardLinkInputSchema).max(20).default([]),
     locations: z.array(cardLocationInputSchema).max(10).default([]),
+    /**
+     * What the person confirmed after previewing an inference, if they
+     * previewed one at all. Optional on purpose: publishing without ever
+     * asking for a suggestion is the ordinary path, not a degraded one, and
+     * the server falls back to its own offline classifier when this is
+     * absent - which is also what keeps the whole composer working with the
+     * model switched off.
+     */
+    confirmedInference: confirmedInferenceSchema.optional(),
   })
   .refine(
     (v) => v.body.length > 0 || v.attachmentIds.length > 0 || v.links.length > 0 || v.locations.length > 0,

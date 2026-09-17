@@ -46,6 +46,13 @@ test.describe.serial('Superadmin: bootstrap, MFA, and moderator appointment', ()
     // Idempotent (Task 05) - safe even if a prior run (or Task 05's own
     // verification) already bootstrapped this exact phone number.
     execSync('npm run bootstrap:superadmin', { stdio: 'pipe' });
+
+    // Clean up in beforeAll, not only after: an interrupted run leaves a
+    // PENDING TOTP enrollment behind and every later run then gets "برای
+    // بازنشانی احراز دومرحله‌ای، ابتدا آن را تأیید کنید" instead of a fresh
+    // secret - permanently, until somebody clears the row by hand. Same
+    // remedy space-search.repository.test.ts got in Task 19.
+    execSync('npx tsx tests/e2e/helpers/reset-superadmin-mfa.mjs', { stdio: 'pipe' });
   });
 
   test('the bootstrap superadmin cannot use /admin without completing MFA, even right after logging in', async ({ page }) => {
