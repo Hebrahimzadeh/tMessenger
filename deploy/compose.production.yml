@@ -120,6 +120,16 @@ services:
       HOST: 0.0.0.0
     ports:
       - '127.0.0.1:18400:4000'
+    # The API signs object-storage URLs on the public hostname and browsers
+    # fetch them there, so S3_ENDPOINT has to be the public one. Resolving
+    # that name from inside the container goes out to the host's upstream
+    # resolvers, which answer for this zone only intermittently (observed
+    # 2026-09-17: two of three lookups succeeded, the third timed out), and a
+    # failed lookup surfaces as "storage: down" on /v1/health/ready with
+    # nothing in the logs to explain it. Pinning the name takes a flaky
+    # external dependency out of a purely internal code path.
+    extra_hosts:
+      - 'tmessenger.taavonafarin.ir:${PUBLIC_HOST_IP:?Set PUBLIC_HOST_IP to this server public IP}'
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -138,6 +148,17 @@ services:
       REDIS_URL: redis://redis:6379
     working_dir: /app/services/worker
     command: ['node', '/app/node_modules/tsx/dist/cli.mjs', 'src/worker.ts']
+    # The API signs object-storage URLs on the public hostname and browsers
+    # fetch them there, so S3_ENDPOINT has to be the public one. Resolving
+    # that name from inside the container goes out to the host's upstream
+    # resolvers, which answer for this zone only intermittently (observed
+    # 2026-09-17: two of three lookups succeeded, the third timed out), and a
+    # failed lookup surfaces as "storage: down" on /v1/health/ready with
+    # nothing in the logs to explain it. Pinning the name takes a flaky
+    # external dependency out of a purely internal code path.
+    extra_hosts:
+      - 'tmessenger.taavonafarin.ir:${PUBLIC_HOST_IP:?Set PUBLIC_HOST_IP to this server public IP}'
+
     healthcheck:
       disable: true
     depends_on:
