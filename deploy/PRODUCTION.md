@@ -1,121 +1,186 @@
-# TMessenger deployment — UI preview
+# TMessenger deployment — test environment
 
 Public URL: `https://tmessenger.taavonafarin.ir`
 SSH: `root@185.252.29.27`, port `2727`.
-Release: `/opt/tmessenger/releases/20260911-5797505`.
+Release: `/opt/tmessenger/releases/20260917-0e9b3b3` (Tasks 1-25, plus the
+deployment fixes below).
 Runtime settings: `/opt/tmessenger/shared/.env` (mode `0600`, root only).
+Previous release kept for rollback: `20260911-5797505` (UI preview).
 
-## Current behavior
+## Current behaviour
 
-The domain now serves the new TMessenger web container in UI preview mode.
-The home, chats, chat detail, and comments screens use the project's existing
-browser-local sample data. A visible banner identifies the preview. Admin,
-profile, security, and other real account pages retain their login checks.
-Preview is explicitly enabled with `UI_PREVIEW_MODE=true`; the default is off.
+The full stack runs: web, API, worker, PostgreSQL, Redis, object storage and
+the Docker proxy. UI preview mode is off — this is the real application
+against a real database, not sample data.
 
-SMS settings are deliberately unset per the owner's request. The production
-API remains stopped. The Docker proxy returns an explicit 503 preview response
-for `/api/*` and `/socket.io/*`; it does not simulate successful login or service
-availability. Local UI interactions do not create production accounts or data.
+**Anyone can log in as any phone number.** There is no SMS gateway, so the
+API runs with `ALLOW_TEST_LOGIN_WITHOUT_SMS=true`, which keeps the dev OTP
+sink and the `/v1/auth/otp/_dev-sink` route that reads codes back out of it.
+The login screen calls that route and fills the code in by itself. This is a
+deliberate hole, chosen by the owner for a test deployment with no real
+accounts on it, and it must be closed before anyone real signs up — see
+"Switch to real SMS" below. The API prints a `[SECURITY]` warning on every
+boot while it is open.
+
+`NODE_ENV` stays `production` regardless, so session cookies keep `Secure`
+and the secret-strength checks still run. Enabling test login does not soften
+anything else.
+
+AI features run with **no model provider**. Google's Generative Language API
+returns HTTP 403 to this server on geographic grounds, and the same block
+applies from Iran generally, so `GEMINI_API_KEY` is deliberately unset. Every
+capability answers from its rule-based fallback, which is a supported way to
+run: space guidance still classifies and gates, card inference still picks a
+kind and a behaviour, and the interface says plainly that no model wrote the
+suggestion. See "Enable AI later".
 
 ## Docker services and routing
 
-All application services are Docker Compose services in project `tmessenger`:
-web, proxy (Caddy), PostgreSQL, Redis, object storage, migration job, and worker.
-The API image is built and ready for later configuration. Database and Redis
-have no published host ports. Published project ports are loopback-only.
+All application services are Docker Compose services in project `tmessenger`.
+Database and Redis publish no host ports; every published project port is
+loopback-only.
 
 ```text
 HTTPS tmessenger.taavonafarin.ir
   -> existing shared host nginx (TLS, also serves unrelated websites)
   -> 127.0.0.1:18880 -> tmessenger-proxy Docker container
-  -> web:3000 / object-storage:9000 on the project's private Docker network
+  -> web:3000, api:4000, object-storage:9000 on the project's private network
 ```
 
-The shared host nginx and certificate-renewal infrastructure stay in place to
-preserve the server's other sites. They are the only host-level infrastructure
-used by this deployment. App and storage routing lives in the Docker proxy.
+The shared host nginx and its certificate renewal stay in place for the
+server's other sites; they are the only host-level infrastructure this
+deployment uses. Site Manager on the parent domain is untouched — its four
+containers and its own compose project are unchanged, and this domain's
+nginx virtual host takes precedence for this exact hostname only.
 
-The old Site Manager route still points to its `taavon` container internally.
-The exact nginx virtual host for this domain now takes precedence and forwards
-to the new Docker proxy, so it cannot accidentally serve the old application.
-The old container is retained for rollback; no unrelated site was removed.
-
-## Operate the preview
-
-In the release directory:
+## Operate
 
 ```sh
+cd /opt/tmessenger/releases/20260917-0e9b3b3
 DC='docker compose --env-file /opt/tmessenger/shared/.env -f deploy/compose.production.yml'
-$DC config --quiet
-$DC build object-storage
-$DC build migrate
-$DC build web
-$DC up -d web proxy worker
-$DC ps -a
+$DC ps
+$DC logs -f api
+$DC up -d            # full stack, including the API
 ```
 
-Preview settings in the protected environment file:
+Never print the environment file or `$DC config` output: both contain secrets.
 
-```dotenv
-UI_PREVIEW_MODE=true
-PROXY_CONFIG=/opt/tmessenger/releases/20260911-5797505/deploy/Caddyfile.preview
-```
-
-Do not run an unrestricted `up -d` until SMS configuration is supplied, because
-it also starts the production API, which intentionally rejects missing SMS.
-Never print the environment file or resolved Compose configuration with secrets.
-
-## Activate real services later
-
-Configure the actual SMS adapter and change the preview settings:
-
-```dotenv
-SMS_PROVIDER_WEBHOOK_URL=https://your-real-adapter/send-otp
-SMS_PROVIDER_API_KEY=your-real-key
-UI_PREVIEW_MODE=false
-PROXY_CONFIG=/opt/tmessenger/releases/20260911-5797505/deploy/Caddyfile.production
-```
-
-The adapter must accept `POST {"phoneE164":"...","code":"..."}` with a Bearer
-key and return success only when delivery is accepted. Example credentials are
-not usable. No real SMS is sent by the deployment validation.
-
-Then run:
+## Deploying a new release
 
 ```sh
-bash deploy/activate-production.sh --check
-bash deploy/activate-production.sh
+# On a workstation, from the repo root:
+TAG=$(date +%Y%m%d)-$(git rev-parse --short HEAD)
+git archive --format=tar.gz -o /tmp/t-$TAG.tar.gz HEAD
+scp -P 2727 /tmp/t-$TAG.tar.gz root@185.252.29.27:/tmp/
+
+# On the server:
+mkdir -p /opt/tmessenger/releases/$TAG
+tar -xzf /tmp/t-$TAG.tar.gz -C /opt/tmessenger/releases/$TAG
+E=/opt/tmessenger/shared/.env
+sed -i "s|^RELEASE_TAG=.*|RELEASE_TAG=$TAG|" $E
+sed -i "s|^PROXY_CONFIG=.*|PROXY_CONFIG=/opt/tmessenger/releases/$TAG/deploy/Caddyfile.production|" $E
+cd /opt/tmessenger/releases/$TAG
+DC="docker compose --env-file $E -f deploy/compose.production.yml"
+$DC build object-storage migrate web
+$DC up -d
 ```
 
-The runtime preview switch does not require another image build. The activation
-script validates production settings, starts the stack, checks dependency
-readiness, and validates HTTPS routing. Both web and API use the same session
-signing key. The phone encryption key must not be rotated without a data migration.
+Migrations run automatically as the `migrate` service before the API starts,
+and are forward-only. Rolling application code back does not roll the schema
+back.
+
+## Switch to real SMS
+
+Put a real gateway in the environment file and drop the test-login flag:
+
+```dotenv
+SMS_PROVIDER_WEBHOOK_URL=https://your-adapter/send-otp
+SMS_PROVIDER_API_KEY=your-real-key
+ALLOW_TEST_LOGIN_WITHOUT_SMS=false
+```
+
+Then `$DC up -d api`. No rebuild is needed. A configured gateway wins over
+the flag even if it is left set, so the hole cannot stay open by accident,
+but removing it is still the right thing to do. The adapter must accept
+`POST {"phoneE164":"...","code":"..."}` with a Bearer key and report success
+only when delivery is accepted.
+
+## Enable AI later
+
+`GEMINI_API_KEY` in the environment file, then `$DC up -d api`. No rebuild.
+Two things stand in the way today:
+
+- **Geographic block.** `generativelanguage.googleapis.com` answers HTTP 403
+  to this server. Reaching it needs an outbound proxy; the server already runs
+  a `mihomo` client for Site Manager, but wiring the API through it is a
+  change nobody has designed yet.
+- **Model retirement.** `gemini-2.0-flash`, which the provider shipped with,
+  now answers 404 ("no longer available ... use models/gemini-3.6-flash").
+  The default is updated, and `GEMINI_MODEL` overrides it from the
+  environment when the next one retires.
+
+`AI_DAILY_BUDGET_MICROS` sets a daily ceiling in micros across everyone.
+
+## Admin access
+
+No superadmin is bootstrapped. To create one, put the phone number in
+`BOOTSTRAP_SUPERADMIN_PHONE` in the environment file and run, from a release
+directory, `docker compose ... run --rm api npm run bootstrap:superadmin`.
+The account then has to enrol TOTP at `/settings/security` before `/admin`
+will let it in.
 
 ## Certificates and rollback
 
-The dedicated certificate is valid through 2026-12-09; its scheduled renewal
-check and a simulated renewal both succeeded. Its host timer is
+The certificate for this hostname renews on its own host timer,
 `tmessenger-certificate-renewal.timer`, independent of application restarts.
 
-The pre-preview routing backup is:
-`/opt/tmessenger/shared/https.before-preview.nginx.conf`.
-Restore it to `/etc/nginx/sites/tmessenger.https.nginx.conf`, run `nginx -t`, then
-reload nginx to return this domain to the old Site Manager frontend. Application
-rollback does not roll back database migrations. Never run `down -v` unless
-intentionally destroying the application's data.
+Routing backup from before the first deployment:
+`/opt/tmessenger/shared/https.before-preview.nginx.conf`. Restore it to
+`/etc/nginx/sites/tmessenger.https.nginx.conf`, run `nginx -t`, then reload
+nginx to return this domain to the old Site Manager frontend.
 
-## Verification — 2026-09-11
+To roll the application back, point `RELEASE_TAG` and `PROXY_CONFIG` at
+`20260911-5797505` and `$DC up -d`; its images are still on the host. Never
+run `down -v` unless you intend to destroy the application's data.
 
-- 37 routing/session tests pass, including preview-off login and protected pages.
-- The production web build passes without production secrets in the image.
-- `/`, `/chats`, and `/comments` return 200 via the public Docker proxy.
-- Browser navigation across those three screens succeeds with no JavaScript errors.
-- All 12 migrations completed. Both daily worker jobs have run successfully.
-- Private storage upload, HTTPS signed download, anonymous denial, and cleanup pass.
-- API requests in preview return a clear 503; SMS credentials remain unset.
+## Verification — 2026-09-17
 
-The storage container uses unchanged vendor binaries pinned by digest on Alpine
-because the vendor base image requires CPU instructions absent on this server.
-Upstream reference: https://github.com/minio/minio/issues/18365.
+Against the live public URL, after the deployment:
+
+- All 18 migrations applied (12 before, 6 new). The policy baseline seeded 8
+  rules: 5 SEVERE, 3 REVIEW.
+- `/api/v1/health/ready` returns `ok` for database, Redis and storage, on
+  three consecutive polls.
+- Full login end to end: OTP request, code read back, verify 200, session
+  cookies set with `Secure`, and an authenticated `/api/v1/me` returning 200.
+- In a real browser: the login screen fills the code in by itself, lands on
+  `/`, the space composer loads, `/system-status` reports everything healthy,
+  and the console has no errors.
+- The space-creation gate works against the seeded baseline: a title matching
+  the `gambling` rule is refused with 422 `SPACE_BLOCKED` and creates no
+  space; an ordinary one reaches precheck `ALLOW` citing
+  `baseline:v1:8rules`.
+- `/api/v1/ai/suggest` returns outcome `FALLBACK` with a usable rule-based
+  answer, which is the designed no-provider behaviour.
+- Site Manager's four containers and the parent domain are unchanged, and
+  `nginx -t` passes.
+- Verification accounts and spaces were deleted afterwards; the database
+  holds 0 users and 0 spaces.
+
+### Three defects this deployment found
+
+All three were invisible to the test suite and only appeared on a real host.
+
+1. **An empty environment variable crashed the API.** Compose writes
+   `${VAR:-}` as an empty string and `.optional()` rejects that rather than
+   treating it as unset, so the API refused to boot over `GEMINI_API_KEY`
+   that nobody had set. `AI_DAILY_BUDGET_MICROS` had the dangerous version:
+   `z.coerce.number()` reads `''` as `0`, a real ceiling of nothing.
+2. **Storage reported down because of a flaky DNS lookup.** The API signs
+   storage URLs on the public hostname, so its own internal calls resolved
+   that name through the host's upstream resolvers — which answer for this
+   zone only intermittently (two of three lookups succeeded). The name is now
+   pinned via `extra_hosts` to `PUBLIC_HOST_IP`.
+3. **The default Gemini model was retired**, so the provider would have
+   404ed the moment a key was configured and every capability would have
+   silently fallen back.
