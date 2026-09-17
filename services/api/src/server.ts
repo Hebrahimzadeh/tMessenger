@@ -9,7 +9,7 @@ import { createRealtimeGateway, type RealtimeGateway } from './modules/messaging
 import { createPrismaMessagingRepository } from './modules/messaging/messaging.repository';
 import { createPrismaSessionLiveness } from './modules/messaging/realtime-auth';
 import { REALTIME_SEND_RATE_LIMIT, REALTIME_SEND_RATE_WINDOW_SECONDS } from './modules/messaging/realtime.gateway';
-import { createSmsProvider } from './modules/auth/sms-provider';
+import { createSmsProvider, DevSmsSinkProvider } from './modules/auth/sms-provider';
 import { createRedisRateLimiter, type RateLimiter } from './modules/auth/rate-limiter';
 import { AiOrchestrator } from './modules/ai/orchestrator';
 import { createPrismaOrchestratorRepository } from './modules/ai/ai.repository';
@@ -30,8 +30,19 @@ async function main() {
   });
 
   // Fails fast in production without a real provider configured (Task 06
-  // acceptance: "production بدون provider معتبر start نشود").
+  // acceptance: "production بدون provider معتبر start نشود"), unless
+  // ALLOW_TEST_LOGIN_WITHOUT_SMS explicitly asks for the test sink instead.
   const smsProvider = createSmsProvider(env);
+
+  if (isProduction && smsProvider instanceof DevSmsSinkProvider) {
+    // Printed on every boot, deliberately. A deployment where anyone can
+    // read anyone's login code should never be something you have to go
+    // looking for in a config file to discover.
+    console.warn(
+      '[SECURITY] ALLOW_TEST_LOGIN_WITHOUT_SMS is on. /v1/auth/otp/_dev-sink is exposed and ' +
+        'anyone who can reach this API can log in as any phone number. Do not use with real accounts.'
+    );
+  }
 
   // Same forward-reference trick as checkRedis below: `.consume` is a
   // closure body that only runs at request time, well after `app` and the

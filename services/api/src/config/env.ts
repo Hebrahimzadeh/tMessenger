@@ -41,6 +41,23 @@ const baseSchema = z.object({
   // provider" - see sms-provider.ts's SmsProviderNotConfiguredError.
   SMS_PROVIDER_WEBHOOK_URL: z.string().url().optional(),
   SMS_PROVIDER_API_KEY: z.string().min(1).optional(),
+  /**
+   * Lets a production deployment log in with no SMS gateway, by keeping the
+   * dev sink (and the `/v1/auth/otp/_dev-sink` route that reads codes back
+   * out of it) available.
+   *
+   * This is a deliberate hole and it is named like one. Anyone who can reach
+   * the API can request a code for any phone number and then read it, so it
+   * belongs only on a deployment with no real accounts on it. It exists so
+   * that enabling test login does not require flipping NODE_ENV, which would
+   * quietly also drop `Secure` from every session cookie and skip the
+   * secret-strength checks below - a much larger change than the one being
+   * asked for.
+   */
+  ALLOW_TEST_LOGIN_WITHOUT_SMS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   // Task 23. All optional: with no key the orchestrator runs with no
   // provider and every capability answers from its rule-based fallback,
   // which is a supported way to run rather than a broken one.

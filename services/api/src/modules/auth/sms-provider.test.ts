@@ -75,6 +75,27 @@ describe('createSmsProvider', () => {
     expect(() => createSmsProvider({ NODE_ENV: 'production' })).toThrow(SmsProviderNotConfiguredError);
   });
 
+  it('still throws in production when the test-login flag is explicitly off', () => {
+    expect(() => createSmsProvider({ NODE_ENV: 'production', ALLOW_TEST_LOGIN_WITHOUT_SMS: false })).toThrow(
+      SmsProviderNotConfiguredError
+    );
+  });
+
+  it('hands out the sink in production only when asked for by name', () => {
+    const provider = createSmsProvider({ NODE_ENV: 'production', ALLOW_TEST_LOGIN_WITHOUT_SMS: true });
+    expect(provider).toBeInstanceOf(DevSmsSinkProvider);
+  });
+
+  it('prefers a real gateway over the flag, so leaving it on cannot keep the hole open', () => {
+    const provider = createSmsProvider({
+      NODE_ENV: 'production',
+      ALLOW_TEST_LOGIN_WITHOUT_SMS: true,
+      SMS_PROVIDER_WEBHOOK_URL: 'https://sms.example.com/send',
+      SMS_PROVIDER_API_KEY: 'real-key',
+    });
+    expect(provider).toBeInstanceOf(HttpSmsProvider);
+  });
+
   it('throws in production when only the webhook URL is set', () => {
     expect(() =>
       createSmsProvider({ NODE_ENV: 'production', SMS_PROVIDER_WEBHOOK_URL: 'https://sms.example/send' })

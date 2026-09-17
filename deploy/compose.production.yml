@@ -18,6 +18,14 @@ x-api-environment: &api-environment
   SESSION_HMAC_KEY: ${SESSION_HMAC_KEY:?Set SESSION_HMAC_KEY}
   PHONE_ENCRYPTION_KEY: ${PHONE_ENCRYPTION_KEY:?Set PHONE_ENCRYPTION_KEY}
   APP_ORIGIN: https://tmessenger.taavonafarin.ir
+  # Off unless a deployment asks for it by name. On, the API keeps the dev
+  # OTP sink and its read-back route, so anyone who can reach it can log in
+  # as any phone number - only ever for a deployment with no real accounts.
+  # NODE_ENV stays 'production' either way, so session cookies keep `Secure`
+  # and the secret-strength checks still run.
+  ALLOW_TEST_LOGIN_WITHOUT_SMS: ${ALLOW_TEST_LOGIN_WITHOUT_SMS:-false}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  AI_DAILY_BUDGET_MICROS: ${AI_DAILY_BUDGET_MICROS:-}
 
 services:
   postgres:

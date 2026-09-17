@@ -19,8 +19,9 @@ export class SmsProviderNotConfiguredError extends Error {
 /**
  * Test/dev-only sink: never sends a real SMS, just records every call so
  * tests (and a developer logging in locally without a real gateway) can
- * read the code back out. createSmsProvider() below refuses to hand this
- * out in production - see SmsProviderNotConfiguredError.
+ * read the code back out. createSmsProvider() below only hands this out in
+ * production when ALLOW_TEST_LOGIN_WITHOUT_SMS explicitly asks for it -
+ * otherwise SmsProviderNotConfiguredError.
  */
 export class DevSmsSinkProvider implements SmsProvider {
   readonly sent: Array<{ phoneE164: string; code: string; sentAt: Date }> = [];
@@ -67,6 +68,7 @@ export interface SmsProviderEnv {
   NODE_ENV: string;
   SMS_PROVIDER_WEBHOOK_URL?: string;
   SMS_PROVIDER_API_KEY?: string;
+  ALLOW_TEST_LOGIN_WITHOUT_SMS?: boolean;
 }
 
 /**
@@ -81,7 +83,12 @@ export function createSmsProvider(env: SmsProviderEnv): SmsProvider {
     return new DevSmsSinkProvider();
   }
 
+  // The one way a production deployment gets the sink, and it has to be
+  // asked for by name. A real gateway still wins when both are set, so
+  // leaving the flag on after configuring one cannot silently keep the hole
+  // open.
   if (!env.SMS_PROVIDER_WEBHOOK_URL || !env.SMS_PROVIDER_API_KEY) {
+    if (env.ALLOW_TEST_LOGIN_WITHOUT_SMS) return new DevSmsSinkProvider();
     throw new SmsProviderNotConfiguredError();
   }
 
