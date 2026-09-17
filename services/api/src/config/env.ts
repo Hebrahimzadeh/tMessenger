@@ -18,6 +18,20 @@ function isWeakSecret(value: string): boolean {
   return WEAK_SECRET_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+/**
+ * Treats an empty value as absent.
+ *
+ * A `.env` file and a Compose `${VAR:-}` default both express "not set" by
+ * setting the variable to an empty string, and plain `.optional()` does not:
+ * it accepts a missing key and then rejects the empty one, so the API refuses
+ * to boot over a variable nobody wanted. `z.coerce.number()` is worse - it
+ * turns `''` into `0`, which for a budget silently means "spend nothing" and
+ * degrades every capability to its fallback with no error anywhere.
+ */
+function optionalEnv<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => (value === '' ? undefined : value), schema.optional());
+}
+
 const baseSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -35,12 +49,12 @@ const baseSchema = z.object({
   // server itself, so it must not block every other boot when unset. Task 05
   // acceptance requires the bootstrap phone number come from here and only
   // here - never hardcoded in source (see bootstrap.ts).
-  BOOTSTRAP_SUPERADMIN_PHONE: z.string().optional(),
+  BOOTSTRAP_SUPERADMIN_PHONE: optionalEnv(z.string().min(1)),
   // Optional here too: shape validation only. createSmsProvider (Task 06)
   // is what actually enforces "production must not start without a valid
   // provider" - see sms-provider.ts's SmsProviderNotConfiguredError.
-  SMS_PROVIDER_WEBHOOK_URL: z.string().url().optional(),
-  SMS_PROVIDER_API_KEY: z.string().min(1).optional(),
+  SMS_PROVIDER_WEBHOOK_URL: optionalEnv(z.string().url()),
+  SMS_PROVIDER_API_KEY: optionalEnv(z.string().min(1)),
   /**
    * Lets a production deployment log in with no SMS gateway, by keeping the
    * dev sink (and the `/v1/auth/otp/_dev-sink` route that reads codes back
@@ -61,10 +75,10 @@ const baseSchema = z.object({
   // Task 23. All optional: with no key the orchestrator runs with no
   // provider and every capability answers from its rule-based fallback,
   // which is a supported way to run rather than a broken one.
-  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_API_KEY: optionalEnv(z.string().min(1)),
   /** Overrides the provider's default model, for when Google retires one. */
-  GEMINI_MODEL: z.string().min(1).optional(),
-  AI_DAILY_BUDGET_MICROS: z.coerce.number().int().nonnegative().optional(),
+  GEMINI_MODEL: optionalEnv(z.string().min(1)),
+  AI_DAILY_BUDGET_MICROS: optionalEnv(z.coerce.number().int().nonnegative()),
 });
 
 export type Env = z.infer<typeof baseSchema>;

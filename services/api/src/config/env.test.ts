@@ -118,3 +118,48 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...validEnv, SMS_PROVIDER_WEBHOOK_URL: 'not-a-url' })).toThrow();
   });
 });
+
+describe('an empty value means unset, not invalid', () => {
+  // A .env file and a Compose `${VAR:-}` default both express "not set" this
+  // way, and the API refusing to boot over a variable nobody wanted is a
+  // deployment failure with no cause worth reporting.
+  const base = {
+    DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
+    REDIS_URL: 'redis://localhost:6379',
+    S3_ENDPOINT: 'http://localhost:9000',
+    S3_BUCKET: 'bucket',
+    S3_ACCESS_KEY: 'access',
+    S3_SECRET_KEY: 'secret',
+    SESSION_HMAC_KEY: 'a'.repeat(32),
+    PHONE_ENCRYPTION_KEY: 'b'.repeat(32),
+    APP_ORIGIN: 'http://localhost:3000',
+  };
+
+  it('accepts empty optional strings and reports them as undefined', () => {
+    const env = parseEnv({
+      ...base,
+      GEMINI_API_KEY: '',
+      GEMINI_MODEL: '',
+      SMS_PROVIDER_WEBHOOK_URL: '',
+      SMS_PROVIDER_API_KEY: '',
+      BOOTSTRAP_SUPERADMIN_PHONE: '',
+    });
+
+    expect(env.GEMINI_API_KEY).toBeUndefined();
+    expect(env.GEMINI_MODEL).toBeUndefined();
+    expect(env.SMS_PROVIDER_WEBHOOK_URL).toBeUndefined();
+    expect(env.SMS_PROVIDER_API_KEY).toBeUndefined();
+    expect(env.BOOTSTRAP_SUPERADMIN_PHONE).toBeUndefined();
+  });
+
+  it('does not turn an empty budget into a zero one', () => {
+    // The dangerous version of the same bug: z.coerce.number() reads '' as 0,
+    // which is a real ceiling of nothing rather than no ceiling at all.
+    expect(parseEnv({ ...base, AI_DAILY_BUDGET_MICROS: '' }).AI_DAILY_BUDGET_MICROS).toBeUndefined();
+    expect(parseEnv({ ...base, AI_DAILY_BUDGET_MICROS: '0' }).AI_DAILY_BUDGET_MICROS).toBe(0);
+  });
+
+  it('still rejects a value that is present and wrong', () => {
+    expect(() => parseEnv({ ...base, SMS_PROVIDER_WEBHOOK_URL: 'not-a-url' })).toThrow();
+  });
+});
