@@ -1,0 +1,20 @@
+# Deploy with:  npx wrangler deploy   (from this directory)
+#
+# Secrets are NOT set here - they are set once with `wrangler secret put`, so
+# neither the Google key nor the relay token is ever committed:
+#   npx wrangler secret put GEMINI_API_KEY   # the real AIzaSy... key
+#   npx wrangler secret put RELAY_TOKEN      # a long random string you invent
+name = "tmessenger-gemini-relay"
+main = "worker.js"
+compatibility_date = "2026-09-18"
+
+# No routes and no custom domain: the generated
+# https://tmessenger-gemini-relay.<your-subdomain>.workers.dev is enough, and
+# it is reachable from the production host (verified 2026-09-18 - Cloudflare
+# answers it directly from Iran and serves it out of the Frankfurt colo).
+workers_dev = true
+
+# Observability off on purpose. Prompts pass through this Worker, and request
+# logs on a third party's infrastructure would be a copy of user text.
+[observability]
+enabled = false
