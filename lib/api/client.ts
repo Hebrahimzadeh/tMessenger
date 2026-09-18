@@ -20,6 +20,21 @@ export class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/**
+ * For the few calls that legitimately take longer than a person expects a web
+ * request to take.
+ *
+ * Building a space asks a model to design the whole thing: measured at 11-20
+ * seconds against the live API. The fixed 10s budget aborted those in the
+ * browser while the server went on and created the space, so the person saw
+ * "the server took too long" and had no idea they now owned a published one.
+ *
+ * Thirty seconds, set by the owner, and the server's own budget is kept below
+ * it (see SPACE_BUILD_TIMEOUT_MS) so the answer arrives rather than the wait
+ * being abandoned halfway.
+ */
+export const LONG_REQUEST_TIMEOUT_MS = 30_000;
+
 function isApiErrorEnvelope(body: unknown): body is ApiErrorEnvelope {
   return (
     typeof body === 'object' &&
@@ -58,7 +73,8 @@ function readCookie(name: string): string | undefined {
 
 /**
  * The only client web code is allowed to use to reach the API. Adds a
- * per-request correlation id, a 10s timeout, `credentials: 'include'` (the
+ * per-request correlation id, a 10s timeout by default (`timeoutMs` raises it
+ * for the rare call that genuinely takes longer), `credentials: 'include'` (the
  * session/CSRF cookies are set by the API's own origin - without this, the
  * browser neither sends them cross-origin nor stores a cross-origin
  * Set-Cookie response at all), the CSRF double-submit header whenever a
@@ -66,17 +82,23 @@ function readCookie(name: string): string | undefined {
  * standard {error:{code,message,correlationId,details}} envelope, a
  * timeout, or a network failure) into a typed ApiError.
  */
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export interface ApiFetchInit extends RequestInit {
+  /** Overrides the default budget. Only for calls that are slow by nature, never to paper over a slow one. */
+  timeoutMs?: number;
+}
+
+export async function apiFetch<T>(path: string, init: ApiFetchInit = {}): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...requestInit } = init;
   const correlationId = createCorrelationId();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   const csrfToken = readCookie(CSRF_COOKIE_NAME);
 
   try {
     let response: Response;
     try {
       response = await fetch(`${apiBaseUrl()}${path}`, {
-        ...init,
+        ...requestInit,
         credentials: 'include',
         signal: controller.signal,
         headers: {
@@ -88,10 +110,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
           // rather than this app's {error:{code,message,...}} envelope -
           // so it was surfacing as a generic UNKNOWN_ERROR client-side for
           // every body-less POST (e.g. /auth/mfa/enroll).
-          ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...(requestInit.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
           'X-Correlation-Id': correlationId,
           ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-          ...init.headers,
+          ...requestInit.headers,
         },
       });
     } catch (err) {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { apiFetch, ApiError, LONG_REQUEST_TIMEOUT_MS } from '@/lib/api/client';
 import { SpaceComposer } from './SpaceComposer';
 
 const originalFetch = global.fetch;
@@ -8,6 +9,14 @@ const SPACE_ID = '11111111-1111-4111-8111-111111111111';
 
 const push = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
+
+// A spy that delegates to the real implementation: the request budget is an
+// argument to apiFetch, which deliberately strips it before calling fetch, so
+// it can only be observed here.
+vi.mock('@/lib/api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/client')>();
+  return { ...actual, apiFetch: vi.fn(actual.apiFetch) };
+});
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -30,10 +39,10 @@ function buildResponse(overrides: Record<string, unknown> = {}) {
  * its own, so it can land before or after the build call.
  */
 function mockFetch(build: unknown, status = 200) {
-  const calls: { url: string; body: unknown }[] = [];
-  global.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+  const calls: { url: string; body: unknown; timeoutMs?: number }[] = [];
+  global.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit & { timeoutMs?: number }) => {
     const url = typeof input === 'string' ? input : input.toString();
-    calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined, timeoutMs: init?.timeoutMs });
     if (url.includes('/spaces/build')) return Promise.resolve(jsonResponse(status, build));
     return Promise.resolve(jsonResponse(200, { items: [] }));
   }) as unknown as typeof fetch;
@@ -178,5 +187,35 @@ describe('SpaceComposer: one prompt and nothing else', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('سرویس در دسترس نیست.');
     expect(screen.getByLabelText('چه بستری می‌خواهید؟')).toHaveValue(PROMPT);
+  });
+
+  it('allows the build far longer than an ordinary request', async () => {
+    mockFetch(buildResponse());
+    const user = userEvent.setup();
+    render(<SpaceComposer />);
+
+    await user.type(screen.getByLabelText('چه بستری می‌خواهید؟'), PROMPT);
+    await user.click(screen.getByRole('button', { name: 'ساخت بستر' }));
+
+    await waitFor(() => expect(push).toHaveBeenCalled());
+    // The default ten seconds aborted a build the server was still doing, so
+    // the person saw a timeout and never learned they owned a space.
+    const build = vi.mocked(apiFetch).mock.calls.find(([path]) => path === '/spaces/build');
+    expect(build?.[1]?.timeoutMs).toBe(LONG_REQUEST_TIMEOUT_MS);
+  });
+
+  it('says the space may exist when a build times out, rather than implying nothing happened', async () => {
+    vi.mocked(apiFetch).mockRejectedValueOnce(
+      new ApiError(0, { code: 'REQUEST_TIMEOUT', message: 'ارتباط با سرور بیش از حد معمول طول کشید.', correlationId: 'x' })
+    );
+    const user = userEvent.setup();
+    render(<SpaceComposer />);
+
+    await user.type(screen.getByLabelText('چه بستری می‌خواهید؟'), PROMPT);
+    await user.click(screen.getByRole('button', { name: 'ساخت بستر' }));
+
+    // The server does not stop building because the browser stopped listening.
+    expect(await screen.findByRole('alert')).toHaveTextContent('ممکن است بستر ساخته شده باشد');
+    expect(push).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, ApiError } from './client';
+import { apiFetch, ApiError, LONG_REQUEST_TIMEOUT_MS } from './client';
 
 const originalFetch = global.fetch;
 
@@ -108,5 +108,60 @@ describe('apiFetch', () => {
       caught = err as ApiError;
     }
     expect(caught?.details).toEqual([detail]);
+  });
+
+  describe('the request budget', () => {
+    /** Resolves only when the signal aborts, which is what a slow endpoint looks like. */
+    function neverResolves() {
+      const fetchMock = vi.fn((_input: unknown, init?: { signal?: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          );
+        })
+      );
+      global.fetch = fetchMock as unknown as typeof fetch;
+      return fetchMock;
+    }
+
+    afterEach(() => vi.useRealTimers());
+
+    it('gives up after ten seconds by default', async () => {
+      vi.useFakeTimers();
+      neverResolves();
+
+      const pending = apiFetch('/legal/current').catch((err: ApiError) => err);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(((await pending) as ApiError).code).toBe('REQUEST_TIMEOUT');
+    });
+
+    it('waits longer when a call is slow by nature, instead of abandoning work the server is still doing', async () => {
+      // Building a space takes a model 11-20 seconds. With the fixed budget the
+      // browser aborted while the server went on and published the space, so
+      // the person saw a timeout and never learned they owned one.
+      vi.useFakeTimers();
+      neverResolves();
+
+      const pending = apiFetch('/spaces/build', { method: 'POST', body: '{}', timeoutMs: LONG_REQUEST_TIMEOUT_MS }).catch(
+        (err: ApiError) => err
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await Promise.race([pending, Promise.resolve('still waiting')])).toBe('still waiting');
+
+      await vi.advanceTimersByTimeAsync(LONG_REQUEST_TIMEOUT_MS - 15_000);
+      expect(((await pending) as ApiError).code).toBe('REQUEST_TIMEOUT');
+    });
+
+    it('does not send timeoutMs on to fetch as a request option', async () => {
+      const fetchMock = mockFetchOnce(
+        new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+      );
+
+      await apiFetch('/spaces/build', { method: 'POST', body: '{}', timeoutMs: 20_000 });
+
+      expect(fetchMock.mock.calls[0]![1]).not.toHaveProperty('timeoutMs');
+    });
   });
 });

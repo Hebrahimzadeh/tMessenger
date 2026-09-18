@@ -22,8 +22,15 @@ export const SPACE_BUILDER_DOCUMENT_REF = `space-builder:v1:${createHash('sha256
 const OPEN_MARKER = '<<<درخواست_کاربر';
 const CLOSE_MARKER = 'درخواست_کاربر>>>';
 
-/** Designing a whole space is a longer answer than any other capability produces. */
-export const SPACE_BUILD_TIMEOUT_MS = 30_000;
+/**
+ * Designing a whole space is a longer answer than any other capability
+ * produces - measured at 11-20 seconds against the live API, retries included.
+ *
+ * Deliberately below the browser's own 30s budget for this call: a server that
+ * outlasts its caller finishes work nobody is waiting for, and the person is
+ * told the request failed while a space quietly appears.
+ */
+export const SPACE_BUILD_TIMEOUT_MS = 24_000;
 /**
  * Generous on purpose. Persian tokenises densely, and current Gemini models
  * spend part of this budget on thinking before they write - too low a cap

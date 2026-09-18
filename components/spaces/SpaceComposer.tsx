@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { buildSpaceResponseSchema, SPACE_BUILD_PROMPT_MAX_CHARS, type BuildSpaceResponse } from '@taavon/contracts';
-import { apiFetch, ApiError } from '@/lib/api/client';
+import { apiFetch, ApiError, LONG_REQUEST_TIMEOUT_MS } from '@/lib/api/client';
 import { SimilarSpaces } from './SimilarSpaces';
 
 /**
@@ -40,7 +40,15 @@ export function SpaceComposer() {
     setBuilding(true);
     try {
       const result = buildSpaceResponseSchema.parse(
-        await apiFetch('/spaces/build', { method: 'POST', body: JSON.stringify({ prompt: prompt.trim() }) })
+        await apiFetch('/spaces/build', {
+          method: 'POST',
+          body: JSON.stringify({ prompt: prompt.trim() }),
+          // Designing a whole space takes a model 11-20 seconds. The
+          // default budget aborted it in the browser while the server
+          // carried on and published the space, leaving the person with
+          // an error and a space they did not know they had.
+          timeoutMs: LONG_REQUEST_TIMEOUT_MS,
+        })
       );
 
       if (result.outcome === 'BLOCKED' || !result.space) {
@@ -52,6 +60,14 @@ export function SpaceComposer() {
       const notice = result.outcome === 'PUBLISHED' ? 'published' : 'review';
       router.push(`/spaces/${encodeURIComponent(result.space.slug)}?built=${notice}&ai=${result.creativityApplied ? 1 : 0}`);
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'REQUEST_TIMEOUT') {
+        // Even with the longer budget this can happen, and if it does the
+        // space may well exist: the server does not stop building because
+        // the browser stopped listening. Saying so is better than an error
+        // that implies nothing happened.
+        setError('ساخت بستر بیش از حد انتظار طول کشید. ممکن است بستر ساخته شده باشد - پیش از تلاش دوباره، فهرست بسترها را ببینید.');
+        return;
+      }
       setError(err instanceof ApiError ? err.message : 'ساخت بستر ممکن نشد. دوباره تلاش کنید.');
     } finally {
       setBuilding(false);
