@@ -24,6 +24,29 @@ export const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.co
  */
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
 
+/** Statuses that mean "ask again", as opposed to "this request was wrong". */
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+/** Extra attempts after the first. Small on purpose: the caller's timeout is the real budget. */
+export const RETRYABLE_ATTEMPTS = 2;
+/** Multiplied by the attempt number, so the second wait is longer than the first. */
+const RETRY_DELAY_MS = 600;
+
+/** Waits, unless the caller's timeout fires first - in which case this is a timeout, not a retry. */
+function delayOrAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new ProviderTimeoutError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(new ProviderTimeoutError());
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /**
  * Rough token accounting. The API does return usage metadata, but it is
  * absent often enough (errors, partial responses) that the budget cannot
@@ -75,31 +98,63 @@ export class GeminiProvider implements AiProvider {
     private readonly baseUrl = DEFAULT_GEMINI_BASE_URL
   ) {}
 
+  /**
+   * Sends the request, retrying the statuses that mean "ask again", not
+   * "this was wrong".
+   *
+   * Measured on 2026-09-18 against the live API: `gemini-3.6-flash` answered
+   * one call in three, the rest `503 UNAVAILABLE - this model is currently
+   * experiencing high demand`. That is a queue, not an outage, and treating it
+   * as a provider failure sent almost every space build to the rule-based
+   * fallback while the model was in fact available.
+   *
+   * Everything stays inside the caller's own timeout: the same abort signal
+   * covers the waits, so a capability that allows ten seconds still takes ten
+   * seconds at most, retries included. A 4xx that is not 429 is never
+   * retried - a bad request does not improve by being repeated.
+   */
+  private async send(body: string, signal: AbortSignal): Promise<Response> {
+    let lastResponse: Response | null = null;
+
+    for (let attempt = 0; attempt <= RETRYABLE_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) await delayOrAbort(RETRY_DELAY_MS * attempt, signal);
+
+      lastResponse = await fetch(`${this.baseUrl}/${this.model}:generateContent?key=${this.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body,
+      });
+
+      if (!RETRYABLE_STATUSES.has(lastResponse.status)) return lastResponse;
+    }
+
+    return lastResponse!;
+  }
+
   async generate(input: ProviderInput): Promise<ProviderResult> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), input.timeoutMs);
 
+    const body = JSON.stringify({
+      contents: [{ parts: [{ text: input.prompt }] }],
+      systemInstruction: input.systemInstruction ? { parts: [{ text: input.systemInstruction }] } : undefined,
+      // Low temperature on purpose: every capability here produces
+      // structured output a schema has to accept, and creativity in that
+      // context is just a higher rejection rate.
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: input.maxOutputTokens ?? 1200,
+        responseMimeType: 'application/json',
+      },
+    });
+
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/${this.model}:generateContent?key=${this.apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: input.prompt }] }],
-          systemInstruction: input.systemInstruction ? { parts: [{ text: input.systemInstruction }] } : undefined,
-          // Low temperature on purpose: every capability here produces
-          // structured output a schema has to accept, and creativity in that
-          // context is just a higher rejection rate.
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: input.maxOutputTokens ?? 1200,
-            responseMimeType: 'application/json',
-          },
-        }),
-      });
+      response = await this.send(body, controller.signal);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') throw new ProviderTimeoutError();
+      if (err instanceof ProviderTimeoutError) throw err;
       throw new ProviderUnavailableError();
     } finally {
       clearTimeout(timer);

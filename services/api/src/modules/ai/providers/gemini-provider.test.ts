@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_GEMINI_BASE_URL, DEFAULT_GEMINI_MODEL, GeminiProvider } from './gemini-provider';
+import { DEFAULT_GEMINI_BASE_URL, DEFAULT_GEMINI_MODEL, GeminiProvider, RETRYABLE_ATTEMPTS } from './gemini-provider';
 import { ProviderTimeoutError, ProviderUnavailableError } from './ai-provider';
 
 const originalFetch = global.fetch;
@@ -84,5 +84,65 @@ describe('GeminiProvider', () => {
   it('refuses an answer with no text rather than returning an empty one', async () => {
     capture(new Response(JSON.stringify({ candidates: [] }), { status: 200 }));
     await expect(new GeminiProvider('key-1').generate(INPUT)).rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  describe('asking again when the answer means "ask again"', () => {
+    function sequence(statuses: number[]) {
+      const calls: string[] = [];
+      let i = 0;
+      global.fetch = vi.fn((url: Parameters<typeof fetch>[0]) => {
+        calls.push(String(url));
+        const status = statuses[Math.min(i, statuses.length - 1)]!;
+        i += 1;
+        return Promise.resolve(
+          status === 200
+            ? answer('{"ok":true}')
+            : new Response(JSON.stringify({ error: { code: status, message: 'high demand' } }), { status })
+        );
+      }) as unknown as typeof fetch;
+      return calls;
+    }
+
+    it('retries a 503 and succeeds, which is what the live API actually does', async () => {
+      // Measured 2026-09-18: gemini-3.6-flash answered one call in three, the
+      // rest 503 "high demand". Without this, nearly every space build fell
+      // back to rules while the model was in fact available.
+      const calls = sequence([503, 200]);
+
+      const result = await new GeminiProvider('key-1').generate(INPUT);
+
+      expect(result.text).toBe('{"ok":true}');
+      expect(calls).toHaveLength(2);
+    });
+
+    it.each([429, 500, 502, 503, 504])('retries a %i', async (status) => {
+      const calls = sequence([status, 200]);
+      await new GeminiProvider('key-1').generate(INPUT);
+      expect(calls).toHaveLength(2);
+    });
+
+    it('gives up after a bounded number of attempts rather than hammering', async () => {
+      const calls = sequence([503]);
+
+      await expect(new GeminiProvider('key-1').generate(INPUT)).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(calls).toHaveLength(RETRYABLE_ATTEMPTS + 1);
+    });
+
+    it.each([400, 401, 403, 404])('never retries a %i - a wrong request does not improve by repeating', async (status) => {
+      const calls = sequence([status]);
+
+      await expect(new GeminiProvider('key-1').generate(INPUT)).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(calls).toHaveLength(1);
+    });
+
+    it('stops retrying when the caller timeout fires', async () => {
+      const calls = sequence([503]);
+
+      // A budget shorter than a single backoff: the retry must not outlive it.
+      const failure = await new GeminiProvider('key-1').generate({ ...INPUT, timeoutMs: 50 }).catch((err: Error) => err);
+
+      expect(failure).toBeInstanceOf(ProviderTimeoutError);
+      expect(calls.length).toBeLessThanOrEqual(RETRYABLE_ATTEMPTS + 1);
+    });
   });
 });
