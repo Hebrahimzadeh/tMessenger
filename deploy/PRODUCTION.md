@@ -2,10 +2,11 @@
 
 Public URL: `https://tmessenger.taavonafarin.ir`
 SSH: `root@185.252.29.27`, port `2727`.
-Release: `/opt/tmessenger/releases/20260917-0e9b3b3` (Tasks 1-25, plus the
+Release: `/opt/tmessenger/releases/20260919-6e13987` (Tasks 1-25, plus the
 deployment fixes below).
 Runtime settings: `/opt/tmessenger/shared/.env` (mode `0600`, root only).
-Previous release kept for rollback: `20260911-5797505` (UI preview).
+Previous release kept for rollback: `20260918-e6dcc01`, and
+`20260911-5797505` (UI preview) before it.
 
 ## Current behaviour
 
