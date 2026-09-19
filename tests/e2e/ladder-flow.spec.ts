@@ -26,7 +26,7 @@ test('two users take a REUSABLE_RESOURCE card through the full ladder: create, p
 
   // --- Owner (user A): create the "نردبان" card -----------------------
   await page.goto(spaceUrl);
-  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByRole('button', { name: 'ایجاد درخواست یا کارت جدید...' }).click();
   await page.getByLabel('متن کارت').fill('نردبان سه‌متری قابل امانت برای کارهای محله. هر کس نیاز داشت رزرو کند.');
   await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
 
@@ -85,7 +85,7 @@ test('the ladder is inferred as something to lend, and says its close is final b
   const spaceUrl = await createAndPublishSpace(page, `امانات ابزار ${Math.floor(Math.random() * 1_000_000)}`);
 
   await page.goto(spaceUrl);
-  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByRole('button', { name: 'ایجاد درخواست یا کارت جدید...' }).click();
   await page.getByLabel('متن کارت').fill('یک نردبان دارم که می‌توانم قرض بدهم. هر وقت لازم داشتید خبر بدهید.');
 
   await page.getByRole('button', { name: 'پیشنهاد برای این متن' }).click();
@@ -109,7 +109,7 @@ test('a suggested kind can be corrected before the card exists', async ({ page }
   const spaceUrl = await createAndPublishSpace(page, `کارگاه محله ${Math.floor(Math.random() * 1_000_000)}`);
 
   await page.goto(spaceUrl);
-  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByRole('button', { name: 'ایجاد درخواست یا کارت جدید...' }).click();
   await page.getByLabel('متن کارت').fill('یک نردبان دارم که می‌توانم قرض بدهم.');
   await page.getByRole('button', { name: 'پیشنهاد برای این متن' }).click();
   await expect(page.getByText('پیشنهاد برای این کارت')).toBeVisible();
@@ -137,7 +137,7 @@ test('with the suggestion unavailable, a card is still one click away', async ({
   const spaceUrl = await createAndPublishSpace(page, `بستر بی‌دستیار ${Math.floor(Math.random() * 1_000_000)}`);
 
   await page.goto(spaceUrl);
-  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByRole('button', { name: 'ایجاد درخواست یا کارت جدید...' }).click();
   await page.getByLabel('متن کارت').fill('یه چیزی برای کمک دارم');
 
   await page.getByRole('button', { name: 'پیشنهاد برای این متن' }).click();
@@ -154,7 +154,7 @@ test('a generic sentence publishes without ever asking for a suggestion', async 
   const spaceUrl = await createAndPublishSpace(page, `بستر ساده ${Math.floor(Math.random() * 1_000_000)}`);
 
   await page.goto(spaceUrl);
-  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByRole('button', { name: 'ایجاد درخواست یا کارت جدید...' }).click();
   await page.getByLabel('متن کارت').fill('یه خبر برای محله دارم که گفتنش بد نیست.');
 
   // No kind selector stands between them and posting - "فرم نوع اجباری نیست".

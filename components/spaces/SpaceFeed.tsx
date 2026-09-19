@@ -9,6 +9,8 @@ import { CardTemplate } from './CardTemplate';
 export interface SpaceFeedProps {
   spaceId: string;
   cardHints: SpaceCardHint[] | null;
+  /** What the space's own search box holds. Filters what is already loaded, the way a chat's in-conversation search does. */
+  query?: string;
 }
 
 /**
@@ -21,7 +23,7 @@ export interface SpaceFeedProps {
  * in one place instead of being duplicated between a hint-renderer and a
  * real-card-renderer.
  */
-export function SpaceFeed({ spaceId, cardHints }: SpaceFeedProps) {
+export function SpaceFeed({ spaceId, cardHints, query = '' }: SpaceFeedProps) {
   const [cards, setCards] = useState<CardListItem[] | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,8 +63,11 @@ export function SpaceFeed({ spaceId, cardHints }: SpaceFeedProps) {
     }
   }
 
-  const hints = cardHints ?? [];
-  const hasNothing = cards !== null && cards.length === 0 && hints.length === 0;
+  const needle = query.trim();
+  const matches = (...fields: (string | undefined)[]) => needle.length === 0 || fields.some((f) => f?.includes(needle));
+  const visibleCards = (cards ?? []).filter((card) => matches(card.title, card.body));
+  const hints = (cardHints ?? []).filter((hint) => matches(hint.title, hint.description));
+  const hasNothing = cards !== null && visibleCards.length === 0 && hints.length === 0;
 
   return (
     <div dir="rtl" className="text-right">
@@ -73,14 +78,14 @@ export function SpaceFeed({ spaceId, cardHints }: SpaceFeedProps) {
       )}
 
       {hasNothing && (
-        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
-          هنوز کارتی در این بستر ثبت نشده است.
+        <div className="rounded-2xl border border-dashed border-gray-300 bg-white/60 p-8 text-center text-sm text-gray-500">
+          {needle.length > 0 ? 'کارتی با این عبارت پیدا نشد.' : 'هنوز کارتی در این بستر ثبت نشده است. اولین کارت را شما بنویسید.'}
         </div>
       )}
 
-      {cards && cards.length > 0 && (
+      {visibleCards.length > 0 && (
         <ul>
-          {cards.map((card) => (
+          {visibleCards.map((card) => (
             <li key={card.id}>
               <CardTemplate variant="real" card={card} />
             </li>
@@ -88,7 +93,7 @@ export function SpaceFeed({ spaceId, cardHints }: SpaceFeedProps) {
         </ul>
       )}
 
-      {nextCursor && (
+      {nextCursor && needle.length === 0 && (
         <button
           type="button"
           onClick={loadMore}

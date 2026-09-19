@@ -28,6 +28,8 @@ function fakeSpaceRepo(): SpaceRepository {
   const spaces = new Map<string, FakeSpace>();
   const versionsBySpace = new Map<string, SpaceVersionRecord[]>();
   const rolesBySpace = new Map<string, SpaceRoleRecord[]>();
+  /** spaceId -> the users following it. The fake has no follow endpoint; the tests that care seed it directly. */
+  const followersBySpace = new Map<string, Set<string>>();
   const invites = new Map<string, { spaceId: string; revokedAt: Date | null }>();
   const builtAudit: Parameters<SpaceRepository['createBuiltSpace']>[0][] = [];
   const newId = (_prefix: string) => randomUUID();
@@ -67,6 +69,32 @@ function fakeSpaceRepo(): SpaceRepository {
     async findById(id) {
       return record(id);
     },
+    async followState(spaceId, userId) {
+      const followers = followersBySpace.get(spaceId) ?? new Set<string>();
+      return { followerCount: followers.size, isFollowing: userId !== null && followers.has(userId) };
+    },
+
+    async listByCreator(creatorId, limit) {
+      // Insertion order reversed stands in for "newest first" - the fake has
+      // no clock, and nothing here depends on the exact timestamps.
+      return [...spaces.values()]
+        .filter((s) => s.creatorId === creatorId && s.status !== 'ARCHIVED' && s.status !== 'REMOVED')
+        .reverse()
+        .slice(0, limit)
+        .map((s) => {
+          const versions = versionsBySpace.get(s.id) ?? [];
+          const latest = versions[versions.length - 1];
+          return {
+            id: s.id,
+            slug: s.slug,
+            title: latest?.title ?? s.slug,
+            purpose: latest?.purpose ?? '',
+            status: s.status,
+            createdAt: new Date('2026-09-19T00:00:00.000Z'),
+          };
+        });
+    },
+
     async findBySlug(slug) {
       const found = [...spaces.values()].find((s) => s.slug === slug);
       return found ? record(found.id) : null;
@@ -734,6 +762,46 @@ describe('PATCH /v1/spaces/:id after publication', () => {
       payload: { ...body, title: 'تصاحب' },
     });
     expect(res.statusCode).toBe(403);
+    await app.close();
+  });
+});
+
+describe('GET /v1/spaces/mine', () => {
+  it('lists the caller own spaces, including one still waiting for a person', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    await app.inject({ method: 'POST', url: '/v1/spaces', cookies: sessionCookieFor(USER_1), payload: { title: 'باغ محله' } });
+
+    const response = await app.inject({ method: 'GET', url: '/v1/spaces/mine', cookies: sessionCookieFor(USER_1) });
+
+    expect(response.statusCode).toBe(200);
+    // A DRAFT: before this route existed such a space appeared in no list at
+    // all, because the search index is PUBLISHED-only by design.
+    expect(response.json().items).toMatchObject([{ title: 'باغ محله', status: 'DRAFT' }]);
+    await app.close();
+  });
+
+  it('never shows one person spaces to another', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    await app.inject({ method: 'POST', url: '/v1/spaces', cookies: sessionCookieFor(USER_1), payload: { title: 'باغ محله' } });
+
+    const response = await app.inject({ method: 'GET', url: '/v1/spaces/mine', cookies: sessionCookieFor(USER_2) });
+
+    expect(response.json().items).toEqual([]);
+    await app.close();
+  });
+
+  it('asks an anonymous visitor to sign in rather than answering with somebody list', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const response = await app.inject({ method: 'GET', url: '/v1/spaces/mine' });
+    expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('is not mistaken for a slug - a space called "mine" does not shadow it', async () => {
+    const app = buildApp(fakeSpaceRepo());
+    const response = await app.inject({ method: 'GET', url: '/v1/spaces/mine', cookies: sessionCookieFor(USER_1) });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toHaveProperty('items');
     await app.close();
   });
 });

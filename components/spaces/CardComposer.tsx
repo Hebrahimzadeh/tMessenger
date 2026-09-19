@@ -106,8 +106,11 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
 
   return (
     <form dir="rtl" onSubmit={handleSubmit} className="space-y-3 text-right">
+      {/* The field shape of `tmessenger-v1.html`'s own create-card sheet:
+          a small blue label over a soft-grey box, and nothing between the
+          person and the text they came to write. */}
       <div>
-        <label htmlFor="card-composer-body" className="sr-only">
+        <label htmlFor="card-composer-body" className="mb-1.5 block text-[12px] font-medium text-[#527DA3]">
           متن کارت
         </label>
         <textarea
@@ -115,21 +118,20 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
           value={body}
           onChange={(event) => setBody(event.target.value)}
           placeholder="هر چیزی که می‌خواهید با محله در میان بگذارید..."
-          rows={4}
           disabled={submitting}
-          className="w-full rounded-xl border border-gray-300 p-3 text-sm"
+          className="min-h-[100px] w-full resize-none rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-[14px] transition focus:border-[#527DA3] focus:outline-none"
         />
       </div>
 
       <details>
-        <summary className="cursor-pointer text-xs font-medium text-gray-500">افزودن عنوان (اختیاری)</summary>
+        <summary className="cursor-pointer text-[12px] font-medium text-[#527DA3]">افزودن عنوان (اختیاری)</summary>
         <input
           type="text"
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           disabled={submitting}
           placeholder="عنوان کوتاه..."
-          className="mt-2 w-full rounded-xl border border-gray-200 p-2 text-sm"
+          className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-[14px] transition focus:border-[#527DA3] focus:outline-none"
         />
       </details>
 
@@ -143,7 +145,7 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
             type="button"
             onClick={handleSuggest}
             disabled={inferring || submitting}
-            className="text-sm font-medium text-blue-600 disabled:opacity-50"
+            className="text-[13px] font-medium text-[#527DA3] disabled:opacity-50"
           >
             {inferring ? 'در حال آماده‌سازی پیشنهاد...' : 'پیشنهاد برای این متن'}
           </button>
@@ -151,11 +153,11 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
       )}
 
       {hasContent && (
-        <div className="rounded-xl border border-dashed border-gray-300 p-3">
-          <p className="mb-1 text-xs font-medium text-gray-400">پیش‌نمایش کارت</p>
-          {kind && <p className="mb-1 text-xs text-blue-700">{KIND_LABELS[kind]}</p>}
-          <p className="font-medium text-gray-900">{previewTitle}</p>
-          {trimmedBody && <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">{body}</p>}
+        <div className="rounded-2xl border border-gray-100 bg-white p-3 shadow-sm">
+          <p className="mb-1 text-[11px] font-medium text-gray-400">پیش‌نمایش کارت</p>
+          {kind && <p className="mb-1 text-[11px] text-[#527DA3]">{KIND_LABELS[kind]}</p>}
+          <p className="text-[13px] font-bold text-gray-800">{previewTitle}</p>
+          {trimmedBody && <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700">{body}</p>}
         </div>
       )}
 
@@ -165,16 +167,18 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
         </p>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 pt-1">
         <button
           type="submit"
           disabled={!canSubmit}
-          className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className={`w-full rounded-xl py-3 text-[15px] font-medium transition-all active:scale-[0.98] ${
+            canSubmit ? 'bg-[#527DA3] text-white shadow-md' : 'bg-gray-100 text-gray-400'
+          }`}
         >
           ثبت کارت
         </button>
         {onCancel && (
-          <button type="button" onClick={onCancel} disabled={submitting} className="rounded-xl border border-gray-300 px-4 py-2 text-sm text-gray-700">
+          <button type="button" onClick={onCancel} disabled={submitting} className="w-full rounded-xl py-2 text-[13px] text-gray-500">
             انصراف
           </button>
         )}

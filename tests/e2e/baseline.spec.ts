@@ -23,7 +23,9 @@ test('home page renders the space discovery feed with no console errors', async 
   // about it either way.
   await loginViaDevOtp(page, '/');
 
-  await expect(page.getByRole('heading', { name: 'بسترها', level: 1 })).toBeVisible();
+  // The spaces tab is a chat list: the tab strip names it, and nothing
+  // else sits above the rows. Creating a space is the corner button.
+  await expect(page.getByRole('link', { name: 'بسترها' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'ساخت بستر جدید' })).toBeVisible();
   // Either the empty state or at least one real result - proves the API
   // call actually completed rather than hanging in the loading state.

@@ -21,7 +21,7 @@ test('a real card creation appears in the author\'s own private participation ti
   const title = `بستر آگاهی آزمایشی ${Math.floor(Math.random() * 1_000_000)}`;
   await buildSpaceFromPrompt(page, `${LENDING_PROMPT} - ${title}`);
 
-  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByRole('button', { name: 'ایجاد درخواست یا کارت جدید...' }).click();
   await page.getByLabel('متن کارت').fill('یک اطلاعیهٔ آزمایشی برای بررسی مشارکت‌های من.');
   await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
   await page.waitForURL((url) => /^\/cards\//.test(url.pathname));

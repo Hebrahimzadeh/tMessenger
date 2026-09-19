@@ -20,6 +20,8 @@ function space(overrides: Partial<SpaceResponse['definition']> = {}): SpaceRespo
     publishedAt: '2026-09-17T00:00:00.000Z',
     archivedAt: null,
     canManage: true,
+    followerCount: 3,
+    isFollowing: true,
     definition: {
       versionNumber: 1,
       title: 'امانت ابزار محله',

@@ -15,3 +15,27 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/*
+  The one motion the reference design relies on: a sheet rising from the
+  bottom edge, the way a messenger's sheets do. `tmessenger-v1.html` gets
+  this from tailwindcss-animate over a CDN; here it is four lines rather than
+  a dependency.
+*/
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.sheet-in {
+  animation: sheet-in 0.25s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-in {
+    animation: none;
+  }
+}

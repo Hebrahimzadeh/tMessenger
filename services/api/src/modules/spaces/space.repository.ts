@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from '@taavon/database';
 import type { SpaceCardHint } from '@taavon/contracts';
 import { logAwarenessEvent } from '../../lib/awareness-events';
 import { normalizePersianLetters } from '../../lib/persian-text';
-import type { SpaceRecord, SpaceRepository, SpaceRoleInputRecord } from './space.service';
+import type { MySpaceRecord, SpaceRecord, SpaceRepository, SpaceRoleInputRecord } from './space.service';
 
 /** Denormalized search column - see schema.prisma's Space.searchText comment. Same normalization as slug.ts/space-similarity.service.ts, so a query normalized the same way actually matches. */
 function buildSearchText(title: string, purpose: string, audience: string | undefined): string {
@@ -81,6 +81,43 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
     async slugExists(slug) {
       const found = await prisma.space.findUnique({ where: { slug }, select: { id: true } });
       return found !== null;
+    },
+
+    async followState(spaceId, userId) {
+      const [followerCount, own] = await Promise.all([
+        prisma.spaceFollower.count({ where: { spaceId } }),
+        userId ? prisma.spaceFollower.findUnique({ where: { spaceId_userId: { spaceId, userId } }, select: { id: true } }) : null,
+      ]);
+      return { followerCount, isFollowing: own !== null };
+    },
+
+    async listByCreator(creatorId, limit) {
+      const spaces = await prisma.space.findMany({
+        where: { creatorId, status: { notIn: ['ARCHIVED', 'REMOVED'] } },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        select: {
+          id: true,
+          slug: true,
+          status: true,
+          createdAt: true,
+          definitionVersions: { orderBy: { versionNumber: 'desc' }, take: 1, select: { title: true, purpose: true } },
+        },
+      });
+
+      return spaces.map(
+        (space): MySpaceRecord => ({
+          id: space.id,
+          slug: space.slug,
+          // Every space has a version 1 created in the same transaction as
+          // the space itself, so this is never actually empty; the fallback
+          // is here so a list never throws over one odd row.
+          title: space.definitionVersions[0]?.title ?? space.slug,
+          purpose: space.definitionVersions[0]?.purpose ?? '',
+          status: space.status,
+          createdAt: space.createdAt,
+        })
+      );
     },
 
     async createDraft({ title, slug, policyVersion, creatorId }) {

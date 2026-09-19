@@ -125,12 +125,33 @@ export interface SpaceRecord {
   roles: SpaceRoleRecord[];
 }
 
+/** A row of `listByCreator` - the latest version's title and purpose, and nothing else a list needs. */
+export interface MySpaceRecord {
+  id: string;
+  slug: string;
+  title: string;
+  purpose: string;
+  status: SpaceStatus;
+  createdAt: Date;
+}
+
 export interface SpaceRepository {
   slugExists(slug: string): Promise<boolean>;
   /** Creates the Space row plus its version-1 SpaceDefinitionVersion, and appends a `space.created` outbox event, all in one transaction. */
   createDraft(input: { title: string; slug: string; policyVersion: number; creatorId: string }): Promise<{ id: string }>;
   findById(id: string): Promise<SpaceRecord | null>;
   findBySlug(slug: string): Promise<SpaceRecord | null>;
+  /**
+   * Every space this person created, newest first, whatever its status.
+   *
+   * The one listing allowed to return a space that is not PUBLISHED, and
+   * it is safe precisely because it is keyed on the caller's own id - the
+   * public search index (space-search.repository.ts) still structurally
+   * excludes everything but PUBLISHED.
+   */
+  listByCreator(creatorId: string, limit: number): Promise<MySpaceRecord[]>;
+  /** How many people follow this space, and whether this caller is one of them (false for an anonymous caller). */
+  followState(spaceId: string, userId: string | null): Promise<{ followerCount: number; isFollowing: boolean }>;
   /** SPACE-scoped SPACE_ADMIN role assignment (see schema.prisma's RoleAssignment) - the creator check itself is done by the service, not the repository. */
   hasSpaceAdminRole(userId: string, spaceId: string): Promise<boolean>;
   /** Upserts each role by (spaceId, key), inserts the new version, resets `Space.status` to DRAFT (a fresh edit always needs a fresh precheck), and appends a `space.versioned` outbox event - all in one transaction. */
@@ -600,6 +621,9 @@ export interface SpaceView {
    * this module originally did, silently breaks once PUBLISHED).
    */
   canManage: boolean;
+  /** The space page's "N مشارکت‌کننده", and whether the caller has joined - the two things its toolbar and its join button need. */
+  followerCount: number;
+  isFollowing: boolean;
   /** Only present for the owner/admin view of a *non-published* space - never on the public view (internal pre-publish moderation state, meaningless once actually published). */
   gate?: { verdict: SpaceGateVerdict | null; reason: string | null };
 }
@@ -609,7 +633,7 @@ function referencedRoles(space: SpaceRecord): SpaceRoleRecord[] {
   return space.roles.filter((role) => referencedIds.has(role.id));
 }
 
-function toView(space: SpaceRecord, canManage: boolean): SpaceView {
+function toView(space: SpaceRecord, canManage: boolean, follow: { followerCount: number; isFollowing: boolean }): SpaceView {
   const view: SpaceView = {
     id: space.id,
     slug: space.slug,
@@ -628,6 +652,8 @@ function toView(space: SpaceRecord, canManage: boolean): SpaceView {
       roles: referencedRoles(space),
     },
     canManage,
+    followerCount: follow.followerCount,
+    isFollowing: follow.isFollowing,
   };
   if (canManage && space.status !== 'PUBLISHED') {
     view.gate = { verdict: space.latestVersion.gateVerdict, reason: space.latestVersion.gateReason };
@@ -650,15 +676,26 @@ export async function getSpace(repo: SpaceRepository, idOrSlug: string, callerUs
     callerUserId && (space.creatorId === callerUserId || (await repo.hasSpaceAdminRole(callerUserId, space.id)))
   );
 
-  if (space.status === 'PUBLISHED') {
-    return toView(space, canManage);
-  }
-
-  if (canManage) {
-    return toView(space, canManage);
+  if (space.status === 'PUBLISHED' || canManage) {
+    return toView(space, canManage, await repo.followState(space.id, callerUserId));
   }
 
   throw new SpaceNotFoundError();
+}
+
+/** How many of a person's own spaces one list page carries. Far above anything a person has built, and a bound rather than an unbounded scan. */
+export const MY_SPACES_LIMIT = 100;
+
+/**
+ * The caller's own spaces, newest first.
+ *
+ * Exists because the spaces list is the person's list, the way a chat
+ * list is: a space built from a prompt that still waits for a person to
+ * look at it is theirs, and before this it appeared in no list at all -
+ * only whoever still had the link could reach it.
+ */
+export async function listMySpaces(repo: SpaceRepository, userId: string): Promise<MySpaceRecord[]> {
+  return repo.listByCreator(userId, MY_SPACES_LIMIT);
 }
 
 export async function joinSpaceRole(repo: SpaceRepository, spaceId: string, roleId: string, userId: string): Promise<void> {

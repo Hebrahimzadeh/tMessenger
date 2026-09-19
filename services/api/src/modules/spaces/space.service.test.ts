@@ -61,6 +61,8 @@ function fakeSpaceRepo() {
   const spaces = new Map<string, FakeSpace>();
   const versionsBySpace = new Map<string, SpaceVersionRecord[]>();
   const rolesBySpace = new Map<string, SpaceRoleRecord[]>();
+  /** spaceId -> the users following it. The fake has no follow endpoint; the tests that care seed it directly. */
+  const followersBySpace = new Map<string, Set<string>>();
   const spaceAdmins = new Set<string>(); // `${userId}:${spaceId}`
   const roleMemberships = new Set<string>(); // `${userId}:${roleId}`
   const invites = new Map<string, { spaceId: string; revokedAt: Date | null }>();
@@ -118,6 +120,33 @@ function fakeSpaceRepo() {
     async findById(id) {
       return record(id);
     },
+
+    async followState(spaceId, userId) {
+      const followers = followersBySpace.get(spaceId) ?? new Set<string>();
+      return { followerCount: followers.size, isFollowing: userId !== null && followers.has(userId) };
+    },
+
+    async listByCreator(creatorId, limit) {
+      // Insertion order reversed stands in for "newest first" - the fake has
+      // no clock, and nothing here depends on the exact timestamps.
+      return [...spaces.values()]
+        .filter((s) => s.creatorId === creatorId && s.status !== 'ARCHIVED' && s.status !== 'REMOVED')
+        .reverse()
+        .slice(0, limit)
+        .map((s) => {
+          const versions = versionsBySpace.get(s.id) ?? [];
+          const latest = versions[versions.length - 1];
+          return {
+            id: s.id,
+            slug: s.slug,
+            title: latest?.title ?? s.slug,
+            purpose: latest?.purpose ?? '',
+            status: s.status,
+            createdAt: new Date('2026-09-19T00:00:00.000Z'),
+          };
+        });
+    },
+
 
     async findBySlug(slug) {
       const found = [...spaces.values()].find((s) => s.slug === slug);

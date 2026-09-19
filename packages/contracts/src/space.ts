@@ -98,6 +98,10 @@ export const spaceResponseSchema = z.object({
   archivedAt: z.string().datetime().nullable(),
   definition: spaceDefinitionSchema,
   canManage: z.boolean(),
+  /** How many people follow this space - what its page calls "مشارکت‌کننده". */
+  followerCount: z.number().int(),
+  /** Whether the caller is one of them. Always false for an anonymous visitor. */
+  isFollowing: z.boolean(),
   gate: z.object({ verdict: spaceGateVerdictSchema.nullable(), reason: z.string().nullable() }).optional(),
 });
 export type SpaceResponse = z.infer<typeof spaceResponseSchema>;
@@ -147,3 +151,27 @@ export const resolveSpaceInviteResponseSchema = z.object({
   slug: z.string(),
 });
 export type ResolveSpaceInviteResponse = z.infer<typeof resolveSpaceInviteResponseSchema>;
+
+/**
+ * One row in `GET /v1/spaces/mine` - the caller's own spaces, whatever their
+ * status.
+ *
+ * Separate from `spaceSearchItemSchema` on purpose: search is the public,
+ * ranked, PUBLISHED-only index, and a space still waiting for a person to
+ * look at it has no `publishedAt` and no business being ranked against
+ * everyone else's. This list is the person's own shelf, newest first, and is
+ * the only place a space of theirs that is not yet published can be reached
+ * from a list at all.
+ */
+export const mySpaceItemSchema = z.object({
+  id: z.string().uuid(),
+  slug: z.string(),
+  title: z.string(),
+  purpose: z.string(),
+  status: spaceStatusSchema,
+  createdAt: z.string().datetime(),
+});
+export type MySpaceItem = z.infer<typeof mySpaceItemSchema>;
+
+export const mySpacesResponseSchema = z.object({ items: z.array(mySpaceItemSchema) });
+export type MySpacesResponse = z.infer<typeof mySpacesResponseSchema>;

@@ -138,7 +138,7 @@ test('a reservation opens the same direct room, and back returns to the card it 
   const suffix = Math.floor(Math.random() * 1_000_000);
 
   await buildSpaceFromPrompt(page, `${LENDING_PROMPT} - گفت‌وگو ${suffix}`);
-  await page.getByRole('button', { name: 'ثبت کارت جدید' }).click();
+  await page.getByRole('button', { name: 'ایجاد درخواست یا کارت جدید...' }).click();
   await page.getByLabel('متن کارت').fill('نردبان قابل امانت برای کارهای محله. هر کس نیاز داشت رزرو کند.');
   await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
   await page.waitForURL((url) => /^\/cards\//.test(url.pathname));

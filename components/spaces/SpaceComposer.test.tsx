@@ -71,7 +71,7 @@ describe('SpaceComposer: one prompt and nothing else', () => {
 
   it('says the space can be edited afterwards, so nothing feels final', () => {
     render(<SpaceComposer />);
-    expect(screen.getByText(/بعد از انتشار می‌توانید هر بخش را ویرایش کنید/)).toBeInTheDocument();
+    expect(screen.getByText(/بعد از انتشار می‌توانی هر بخش را ویرایش کنی/)).toBeInTheDocument();
   });
 
   it('sends only the prompt', async () => {
@@ -170,8 +170,10 @@ describe('SpaceComposer: one prompt and nothing else', () => {
     await user.type(screen.getByLabelText('چه بستری می‌خواهید؟'), PROMPT);
     await user.click(screen.getByRole('button', { name: 'ساخت بستر' }));
 
+    // The whole panel becomes the working state, as the reference design's
+    // assistant sheet does - there is no half-usable form underneath it.
     expect(await screen.findByRole('status')).toHaveTextContent('در حال ساخت بستر');
-    expect(screen.getByRole('button', { name: 'در حال ساخت...' })).toBeDisabled();
+    expect(screen.queryByLabelText('چه بستری می‌خواهید؟')).not.toBeInTheDocument();
 
     release(jsonResponse(200, buildResponse()));
     await waitFor(() => expect(push).toHaveBeenCalled());

@@ -1,25 +1,22 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  createSpaceInviteResponseSchema,
   spaceResponseSchema,
   spaceRoleMembershipActionResponseSchema,
-  spaceSearchResponseSchema,
+  type CardResponse,
   type SpaceResponse,
   type SpaceRoleContract,
-  type SpaceSearchItem,
 } from '@taavon/contracts';
-import type { CardResponse } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
+import { Search, X } from '@/components/icons';
 import { CreateCardSheet } from './CreateCardSheet';
 import { PinnedCards } from './PinnedCards';
-import { SpaceHeader } from './SpaceHeader';
+import { SpaceActionBar } from './SpaceActionBar';
 import { SpaceFeed } from './SpaceFeed';
-import { SpaceHealthPanel } from './SpaceHealthPanel';
-import { SpaceEditForm } from './SpaceEditForm';
+import { SpaceInfoSheet, type SpaceInfoTab } from './SpaceInfoSheet';
+import { SpaceToolbar } from './SpaceToolbar';
 
 type GateState =
   | { status: 'loading' }
@@ -27,28 +24,36 @@ type GateState =
   | { status: 'error'; message: string }
   | { status: 'ready'; space: SpaceResponse };
 
-function EmptySection({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-xl border border-dashed border-gray-300 p-4 text-center text-sm text-gray-500">{children}</div>;
-}
-
+/**
+ * A space, as a conversation.
+ *
+ * Owner instruction, 2026-09-19: "زمانی که می‌ریم داخل بستر هم باید عین یک
+ * چت (گفتگو) تلگرام باشه فقط یک جستجو بالا (زیر تولبار مشخصات بستر) داره و
+ * یک ابزار برای ساخت کارت داره دقیقا عین tmessenger-v1.html". So the page is
+ * four fixed pieces in a column - the space's bar, one search box under it,
+ * the cards, and the bar that makes a card - and nothing else. Roles, the
+ * invite link, health, the rules and editing were a stack of nine labelled
+ * sections down this page; they are all still here, behind the toolbar, in
+ * SpaceInfoSheet.
+ */
 export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
   const router = useRouter();
   const [gate, setGate] = useState<GateState>({ status: 'loading' });
   const [createSheetOpen, setCreateSheetOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [infoTab, setInfoTab] = useState<SpaceInfoTab | null>(null);
   const [joinedRoleIds, setJoinedRoleIds] = useState<Set<string>>(new Set());
   const [roleError, setRoleError] = useState<string | null>(null);
-  const [inviteToken, setInviteToken] = useState<string | null>(null);
-  const [inviteError, setInviteError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SpaceSearchItem[] | null>(null);
-  const [editing, setEditing] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [query, setQuery] = useState('');
+
   /** Set once, right after a space is built from a prompt and the person lands here. */
   // From the router, not from `window.location`: on a client navigation the
   // address bar is updated after the new route renders, so reading it during
   // render showed the *previous* URL and the notice never appeared. Frozen in
   // state on mount so stripping the query below cannot make it vanish.
   const searchParams = useSearchParams();
-  const [builtNotice] = useState<{ outcome: 'published' | 'review'; aiWrote: boolean } | null>(() => {
+  const [builtNotice, setBuiltNotice] = useState<{ outcome: 'published' | 'review'; aiWrote: boolean } | null>(() => {
     const built = searchParams.get('built');
     return built === 'published' || built === 'review' ? { outcome: built, aiWrote: searchParams.get('ai') === '1' } : null;
   });
@@ -57,7 +62,9 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
     // A one-time notice: strip it from the address bar so a reload or a shared
     // link does not repeat it forever.
     if (builtNotice) window.history.replaceState(null, '', window.location.pathname);
-  }, [builtNotice]);
+    // Deliberately mount-only: this must not re-run when the notice is dismissed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,23 +105,18 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
     }
   }
 
-  async function handleCreateInvite(spaceId: string) {
-    setInviteError(null);
+  async function setFollowing(space: SpaceResponse, next: boolean) {
+    setJoining(true);
     try {
-      const result = createSpaceInviteResponseSchema.parse(await apiFetch(`/spaces/${spaceId}/invites`, { method: 'POST' }));
-      setInviteToken(result.token);
+      await apiFetch(`/spaces/${space.id}/${next ? 'follow' : 'unfollow'}`, { method: 'POST' });
+      setGate({
+        status: 'ready',
+        space: { ...space, isFollowing: next, followerCount: Math.max(0, space.followerCount + (next ? 1 : -1)) },
+      });
     } catch (err) {
-      setInviteError(err instanceof ApiError ? err.message : 'خطای غیرمنتظره‌ای رخ داد.');
-    }
-  }
-
-  async function handleSearch(event: React.FormEvent) {
-    event.preventDefault();
-    try {
-      const result = spaceSearchResponseSchema.parse(await apiFetch(`/spaces?q=${encodeURIComponent(searchQuery)}`));
-      setSearchResults(result.items);
-    } catch {
-      setSearchResults([]);
+      setRoleError(err instanceof ApiError ? err.message : 'خطای غیرمنتظره‌ای رخ داد.');
+    } finally {
+      setJoining(false);
     }
   }
 
@@ -135,201 +137,104 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
   }
 
   const { space } = gate;
-  const isOwnerView = space.canManage;
+  // Whoever runs the space is always in it; everyone else joins first, which
+  // is the one gate between reading a space and writing in it.
+  const canParticipate = space.canManage || space.isFollowing;
 
   return (
-    <div dir="rtl" className="mx-auto max-w-2xl pb-10 text-right">
-      <SpaceHeader
-        spaceId={space.id}
+    <div dir="rtl" className="relative flex h-full flex-col overflow-hidden bg-[#f4f4f5] text-right">
+      <SpaceToolbar
         title={space.definition.title}
-        purpose={space.definition.purpose}
         status={space.status}
-        isOwnerView={isOwnerView}
+        followerCount={space.followerCount}
+        canManage={space.canManage}
+        onOpenInfo={() => setInfoTab('info')}
+        onOpenManage={() => setInfoTab('manage')}
       />
 
+      <div className="z-20 shrink-0 bg-white p-3 shadow-sm">
+        <div className="relative">
+          <Search size={20} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="جستجو در بستر"
+            placeholder="جستجو در بستر..."
+            className="w-full rounded-xl bg-gray-100 py-3 pl-4 pr-12 text-[14px] font-medium text-gray-800 transition focus:outline-none focus:ring-2 focus:ring-[#527DA3]/30"
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {!query && <PinnedCards spaceId={space.id} />}
+        <div className="p-3">
+          <SpaceFeed spaceId={space.id} cardHints={space.definition.cardHints} query={query} />
+        </div>
+      </div>
+
       {builtNotice && (
-        <div role="status" className="mx-4 mt-4 space-y-1 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-          <p>
-            {builtNotice.outcome === 'published'
-              ? 'بستر شما ساخته و منتشر شد. شما مدیر این بستر هستید و می‌توانید هر بخش آن را ویرایش کنید.'
-              : 'بستر شما ساخته شد و پس از نگاه یک نفر منتشر می‌شود. چیزی رد نشده است و تا آن زمان فقط خودتان آن را می‌بینید.'}
-          </p>
-          {!builtNotice.aiWrote && (
-            // Said out loud: a person acting on the design deserves to know a
-            // model did not write it.
-            <p className="text-xs text-green-700">این بستر بدون دستیار هوش مصنوعی و فقط بر پایهٔ قاعده‌ها ساخته شد.</p>
-          )}
+        <div role="status" className="z-30 shrink-0 border-t border-green-200 bg-[#EEFFDE] px-4 py-2.5 text-[12px] text-green-900">
+          <div className="flex items-start gap-2">
+            <p className="flex-1 leading-relaxed">
+              {builtNotice.outcome === 'published'
+                ? 'بستر شما ساخته و منتشر شد. شما مدیر این بستر هستید و می‌توانید هر بخش آن را ویرایش کنید.'
+                : 'بستر شما ساخته شد و پس از نگاه یک نفر منتشر می‌شود. چیزی رد نشده است و تا آن زمان فقط خودتان آن را می‌بینید.'}
+              {/* Said out loud: a person acting on the design deserves to know
+                  a model did not write it. */}
+              {!builtNotice.aiWrote && ' این بستر بدون دستیار هوش مصنوعی و فقط بر پایهٔ قاعده‌ها ساخته شد.'}
+            </p>
+            <button type="button" onClick={() => setBuiltNotice(null)} aria-label="بستن پیام" className="shrink-0 p-0.5 text-green-800">
+              <X size={16} />
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Published spaces only. Editing one that is waiting for review would go
-          through the draft path and leave it with no way to be published. */}
-      {isOwnerView && space.status === 'PUBLISHED' && (
-        <section className="p-4">
-          {editing ? (
-            <SpaceEditForm
-              space={space}
-              onSaved={(updated) => {
-                setGate({ status: 'ready', space: updated });
-                setEditing(false);
-              }}
-              onCancel={() => setEditing(false)}
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className="w-full rounded-xl border border-gray-300 p-3 text-sm font-medium text-gray-700"
-            >
-              ویرایش بستر
-            </button>
-          )}
-        </section>
-      )}
+      <SpaceActionBar
+        canParticipate={canParticipate}
+        joining={joining}
+        onOpenTools={() => setToolsOpen(true)}
+        onCreateCard={() => setCreateSheetOpen(true)}
+        onJoin={() => setFollowing(space, true)}
+      />
 
-      {isOwnerView && (
-        <section className="p-4">
-          <h2 className="mb-2 text-sm font-semibold text-gray-800">سلامت بستر</h2>
-          <SpaceHealthPanel spaceId={space.id} />
-        </section>
-      )}
+      <CreateCardSheet
+        isOpen={createSheetOpen}
+        spaceId={space.id}
+        onClose={() => setCreateSheetOpen(false)}
+        onCreated={(card: CardResponse) => {
+          setCreateSheetOpen(false);
+          router.push(`/cards/${card.id}`);
+        }}
+      />
 
-      <section className="p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-800">نقش‌ها</h2>
-        {space.definition.roles.length === 0 ? (
-          <EmptySection>هنوز نقشی تعریف نشده است.</EmptySection>
-        ) : (
-          <ul className="space-y-2">
-            {space.definition.roles.map((role) => (
-              <li key={role.id} className="flex items-center justify-between rounded-xl border border-gray-200 p-3">
-                <span className="flex items-center gap-2 text-sm text-gray-800">
-                  {role.title}
-                  {role.isPrimary && (
-                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">اصلی</span>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => toggleRole(space, role)}
-                  className="rounded-xl border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700"
-                >
-                  {joinedRoleIds.has(role.id) ? 'خروج از نقش' : 'پیوستن به نقش'}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {roleError && (
-          <p role="alert" className="mt-2 text-sm text-red-700">
-            {roleError}
-          </p>
-        )}
-      </section>
-
-      {isOwnerView && (
-        <section className="p-4">
-          <h2 className="mb-2 text-sm font-semibold text-gray-800">پیوند دعوت</h2>
-          {inviteToken ? (
-            <p dir="ltr" className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-              {`${typeof window !== 'undefined' ? window.location.origin : ''}/spaces/invite/${inviteToken}`}
+      {toolsOpen && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60" onClick={() => setToolsOpen(false)}>
+          <div className="sheet-in rounded-t-3xl bg-white p-5 pb-8 text-center shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-2 text-[15px] font-bold text-gray-900">ابزارهای این بستر</h2>
+            <p className="text-[13px] leading-relaxed text-gray-500">
+              هنوز ابزاری به این بستر افزوده نشده است. کارت‌ها روش مشارکت در این بستر هستند.
             </p>
-          ) : (
-            <button
-              type="button"
-              onClick={() => handleCreateInvite(space.id)}
-              className="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700"
-            >
-              ساخت پیوند دعوت
+            <button type="button" onClick={() => setToolsOpen(false)} className="mt-4 w-full rounded-xl bg-gray-100 py-2.5 text-[14px] font-medium text-gray-700">
+              بستن
             </button>
-          )}
-          {inviteError && (
-            <p role="alert" className="mt-2 text-sm text-red-700">
-              {inviteError}
-            </p>
-          )}
-        </section>
+          </div>
+        </div>
       )}
 
-      <section className="p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-800">جست‌وجوی بسترها</h2>
-        <form onSubmit={handleSearch} className="flex gap-2" noValidate>
-          <label htmlFor="space-page-search" className="sr-only">
-            جست‌وجوی بسترها
-          </label>
-          <input
-            id="space-page-search"
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="flex-1 rounded-xl border border-gray-300 p-2 text-sm text-gray-900"
-          />
-          <button type="submit" className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white">
-            جست‌وجو
-          </button>
-        </form>
-        {searchResults && (
-          <ul className="mt-2 space-y-2">
-            {searchResults.length === 0 ? (
-              <EmptySection>نتیجه‌ای پیدا نشد.</EmptySection>
-            ) : (
-              searchResults.map((item) => (
-                <li key={item.id}>
-                  <Link href={`/spaces/${item.slug}`} className="text-sm font-medium text-blue-600 underline">
-                    {item.title}
-                  </Link>
-                </li>
-              ))
-            )}
-          </ul>
-        )}
-      </section>
-
-      <section className="p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-800">سنجاق‌شده‌ها</h2>
-        <PinnedCards spaceId={space.id} />
-      </section>
-
-      <section className="p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-800">ایجاد کارت</h2>
-        <button
-          type="button"
-          onClick={() => setCreateSheetOpen(true)}
-          className="w-full rounded-xl border border-dashed border-gray-300 py-3 text-sm font-medium text-gray-600 hover:bg-gray-50"
-        >
-          ثبت کارت جدید
-        </button>
-        <CreateCardSheet
-          isOpen={createSheetOpen}
-          spaceId={space.id}
-          onClose={() => setCreateSheetOpen(false)}
-          onCreated={(card: CardResponse) => {
-            setCreateSheetOpen(false);
-            router.push(`/cards/${card.id}`);
-          }}
+      {infoTab && (
+        <SpaceInfoSheet
+          space={space}
+          initialTab={infoTab}
+          joinedRoleIds={joinedRoleIds}
+          onToggleRole={(role) => toggleRole(space, role)}
+          roleError={roleError}
+          onLeave={space.isFollowing && !space.canManage ? () => setFollowing(space, false) : null}
+          onUpdated={(updated) => setGate({ status: 'ready', space: updated })}
+          onClose={() => setInfoTab(null)}
         />
-      </section>
-
-      <section className="p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-800">فید</h2>
-        <SpaceFeed spaceId={space.id} cardHints={space.definition.cardHints} />
-      </section>
-
-      <section className="p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-800">ابزارها</h2>
-        <EmptySection>ابزاری برای این بستر هنوز اضافه نشده است.</EmptySection>
-      </section>
-
-      <section className="p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-800">قوانین و گزارش</h2>
-        {space.definition.audience ? (
-          <p className="text-sm text-gray-600">{space.definition.audience}</p>
-        ) : (
-          <EmptySection>قانونی برای این بستر ثبت نشده است.</EmptySection>
-        )}
-        <button type="button" disabled className="mt-2 text-sm text-gray-400">
-          گزارش این بستر (به‌زودی)
-        </button>
-      </section>
+      )}
     </div>
   );
 }

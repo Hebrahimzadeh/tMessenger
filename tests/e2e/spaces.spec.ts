@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { loginViaDevOtp } from './helpers/dev-login';
 import { buildSpaceFromPrompt, LENDING_PROMPT } from './helpers/build-space';
+import { openSpaceInfo } from './helpers/space-info';
 
 // Targets the local dev stack - see auth.spec.ts's header comment for how to
 // start the API. Each test logs in as its own fresh, randomly-generated user
@@ -18,25 +19,34 @@ test('one prompt builds a whole space, publishes it, and the public page shows i
 
   await expect(page.getByRole('status').filter({ hasText: 'ساخته و منتشر شد' })).toBeVisible();
 
-  // A real description written about the space, not the prompt pasted back.
-  const heading = page.getByRole('heading', { level: 1 });
-  await expect(heading).toBeVisible();
-  await expect(page.getByText(/بستری است برای|این بستر/)).toBeVisible();
+  // The space is a conversation: its name in the toolbar, one search
+  // box, the feed, and the tool that makes a card. Nothing else.
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  await expect(page.getByLabel('جستجو در بستر')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'ایجاد درخواست یا کارت جدید...' })).toBeVisible();
 
+  await openSpaceInfo(page);
+  // A real description written about the space, not the prompt pasted back.
+  await expect(page.getByText(/بستری است برای|این بستر/)).toBeVisible();
   // Two primary roles, which is what publishing requires.
   await expect(page.getByText('اصلی').first()).toBeVisible();
   expect(await page.getByText('اصلی').count()).toBe(2);
+  await page.getByRole('button', { name: 'بستن' }).click();
 
   // The owner-only health panel, computed on demand.
-  await expect(page.getByRole('heading', { name: 'سلامت بستر' })).toBeVisible();
+  await openSpaceInfo(page, 'manage');
+  await expect(page.getByText('سلامت بستر')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'ویرایش بستر' })).toBeVisible();
+  await page.getByRole('button', { name: 'بستن' }).click();
 
   // The public page, from a completely separate, anonymous browser context.
   const anonPage = await (await context.browser()!.newContext()).newPage();
   await anonPage.goto(spaceUrl);
   await expect(anonPage.getByRole('heading', { level: 1 })).toBeVisible();
-  await expect(anonPage.getByRole('button', { name: 'دنبال کردن' })).toBeVisible();
-  // Editing belongs to the manager, not to a visitor.
-  await expect(anonPage.getByRole('button', { name: 'ویرایش بستر' })).toHaveCount(0);
+  // Someone who has not joined is asked to, where a member writes cards.
+  await expect(anonPage.getByRole('button', { name: 'عضویت در این بستر' })).toBeVisible();
+  // Managing belongs to the manager, not to a visitor - the gear is not there at all.
+  await expect(anonPage.getByRole('button', { name: 'مدیریت بستر' })).toHaveCount(0);
 });
 
 test('a vague prompt still becomes a complete space rather than a form', async ({ page }) => {
@@ -45,7 +55,8 @@ test('a vague prompt still becomes a complete space rather than a form', async (
 
   // No field was ever asked for, and the space exists anyway.
   await expect(page.getByRole('status').filter({ hasText: 'ساخته و منتشر شد' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'نقش‌ها' })).toBeVisible();
+  await openSpaceInfo(page);
+  await expect(page.getByText('نقش‌ها')).toBeVisible();
   expect(await page.getByText('اصلی').count()).toBe(2);
 });
 
@@ -78,7 +89,8 @@ test('a flagged-but-not-banned prompt builds a space held for a person, visible 
   const spaceUrl = await buildSpaceFromPrompt(page, `صندوق محله با سود تضمینی ماهانه ${Math.floor(Math.random() * 1_000_000)}`);
 
   await expect(page.getByRole('status').filter({ hasText: 'پس از نگاه یک نفر منتشر می‌شود' })).toBeVisible();
-  await expect(page.getByText('در انتظار بررسی دستی')).toBeVisible();
+  // The lock badge a space wears in its own toolbar until it is published.
+  await expect(page.getByText('در انتظار بررسی')).toBeVisible();
 
   // Not public until someone looks.
   const anonPage = await (await context.browser()!.newContext()).newPage();
@@ -120,6 +132,7 @@ test('the manager edits the space after publication, and a refused edit changes 
 
   const original = await page.getByRole('heading', { level: 1 }).innerText();
 
+  await openSpaceInfo(page, 'manage');
   await page.getByRole('button', { name: 'ویرایش بستر' }).click();
   await expect(page.getByLabel('عنوان')).toBeVisible();
 
@@ -137,8 +150,10 @@ test('the manager edits the space after publication, and a refused edit changes 
   await page.getByLabel('عنوان').fill(edited);
   await page.getByRole('button', { name: 'ذخیرهٔ تغییرات' }).click();
 
+  await page.getByRole('button', { name: 'بستن' }).click();
   await expect(page.getByRole('heading', { level: 1, name: edited })).toBeVisible();
-  await expect(page.getByText('در انتظار بررسی دستی')).toHaveCount(0);
+  // Still published: an edit to a published space never sends it back for review.
+  await expect(page.getByText('در انتظار بررسی')).toHaveCount(0);
 });
 
 test('an old /platforms/:id link redirects home instead of 404ing', async ({ page }) => {

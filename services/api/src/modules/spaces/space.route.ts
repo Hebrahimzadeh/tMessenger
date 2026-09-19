@@ -5,6 +5,7 @@ import {
   buildSpaceResponseSchema,
   createSpaceBodySchema,
   createSpaceInviteResponseSchema,
+  mySpacesResponseSchema,
   precheckSpaceResponseSchema,
   publishSpaceResponseSchema,
   resolveSpaceInviteResponseSchema,
@@ -34,6 +35,7 @@ import {
   InviteNotFoundError,
   joinSpaceRole,
   leaveSpaceRole,
+  listMySpaces,
   NotSpaceEditorError,
   precheckSpace,
   publishSpace,
@@ -69,6 +71,8 @@ function toResponse(view: Awaited<ReturnType<typeof getSpace>>) {
     archivedAt: view.archivedAt?.toISOString() ?? null,
     definition: view.definition,
     canManage: view.canManage,
+    followerCount: view.followerCount,
+    isFollowing: view.isFollowing,
     ...(view.gate ? { gate: view.gate } : {}),
   });
 }
@@ -149,6 +153,22 @@ export async function spaceRoutes(app: FastifyInstance, opts: SpaceRouteOptions)
       }
       throw err;
     }
+  });
+
+  /**
+   * The caller's own spaces - the list a person opens the app to.
+   *
+   * Registered before `/:idOrSlug` deliberately: Fastify would otherwise
+   * read `mine` as a slug and answer 404 for a space nobody named.
+   */
+  app.get('/mine', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+
+    const items = await listMySpaces(repo(), user.userId);
+    return mySpacesResponseSchema.parse({
+      items: items.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() })),
+    });
   });
 
   app.get('/invites/:token', async (request, reply) => {

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { PinnedCardListResponse } from '@taavon/contracts';
 import { pinnedCardListResponseSchema } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
+import { Pin } from '@/components/icons';
 
 export interface PinnedCardsProps {
   spaceId: string;
@@ -45,21 +46,19 @@ export function PinnedCards({ spaceId }: PinnedCardsProps) {
 
   if (!pins || pins.items.length === 0) return null;
 
+  // The pinned-message strip of a chat: stuck to the top of the feed,
+  // one line each, never a section with a heading of its own.
   return (
-    <div dir="rtl" className="space-y-2 text-right">
-      <p className="text-sm font-semibold text-gray-800">کارت‌های سنجاق‌شده</p>
-      <ul className="space-y-2">
-        {pins.items.map((pin) => (
-          <li key={pin.cardId}>
-            <Link
-              href={`/cards/${pin.cardId}`}
-              className="block rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
-            >
-              📌 {pin.title}
-            </Link>
-          </li>
-        ))}
-      </ul>
+    <div dir="rtl" className="sticky top-0 z-10 divide-y divide-gray-100 border-b border-gray-100 bg-white text-right shadow-sm">
+      {pins.items.map((pin) => (
+        <Link key={pin.cardId} href={`/cards/${pin.cardId}`} className="flex items-center gap-3 px-3 py-2.5 transition hover:bg-gray-50">
+          <Pin size={20} className="shrink-0 text-[#527DA3]" aria-hidden />
+          <div className="min-w-0 flex-1 border-r-2 border-[#527DA3] pr-2.5">
+            <div className="mb-0.5 text-[11px] font-bold text-[#527DA3]">کارت سنجاق‌شده</div>
+            <div className="truncate text-[12px] text-gray-600">{pin.title}</div>
+          </div>
+        </Link>
+      ))}
     </div>
   );
 }
