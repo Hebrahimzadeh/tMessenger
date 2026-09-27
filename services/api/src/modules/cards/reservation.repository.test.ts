@@ -27,7 +27,7 @@ describe.skipIf(!databaseAvailable)('ReservationRepository: real Postgres', () =
 
   async function makeCard() {
     const card = await getPrisma().card.create({ data: { spaceId, authorId: ownerId, kind: 'AWARENESS', status: 'ACTIVE' } });
-    await getPrisma().cardRevision.create({ data: { cardId: card.id, revisionNumber: 1, title: 'x', body: 'x', editorId: ownerId } });
+    await getPrisma().cardRevision.create({ data: { cardId: card.id, revisionNumber: 1, body: 'x', editorId: ownerId } });
     return card.id;
   }
 

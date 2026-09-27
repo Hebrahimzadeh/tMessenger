@@ -119,7 +119,7 @@ function publicTextOf(space: SpaceBuildOutput): string {
     space.audience,
     ...space.participationMethods,
     ...space.roles.flatMap((role) => [role.title, role.description]),
-    ...space.cardHints.flatMap((hint) => [hint.title, hint.description]),
+    ...space.openingCards.flatMap((card) => [card.caption, card.comment]),
   ].join('\n');
 }
 

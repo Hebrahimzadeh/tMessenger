@@ -32,7 +32,7 @@ describe.skipIf(!databaseAvailable)('CommentRepository: real Postgres', () => {
     spaceId = space.id;
     const card = await getPrisma().card.create({ data: { spaceId, authorId, kind: 'AWARENESS', status: 'ACTIVE' } });
     cardId = card.id;
-    await getPrisma().cardRevision.create({ data: { cardId, revisionNumber: 1, title: 'کارت', body: 'متن', editorId: authorId } });
+    await getPrisma().cardRevision.create({ data: { cardId, revisionNumber: 1, body: 'متن', editorId: authorId } });
   });
 
   afterEach(async () => {

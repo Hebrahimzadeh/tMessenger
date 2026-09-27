@@ -13,7 +13,6 @@ import { classify, inferCard, inferFromRules } from './card-inference';
 
 const GOOD_DRAFT = JSON.stringify({
   kind: 'CARD_DRAFT',
-  title: 'نردبان برای امانت',
   body: 'یک نردبان دارم و می‌توانم به همسایه‌ها قرض بدهم.',
 });
 
@@ -166,7 +165,6 @@ describe('generic text is publishable, not a problem to be solved', () => {
       const result = await inferCard(deps(), { body }, null);
 
       expect(result.kind).toBe('AWARENESS');
-      expect(result.suggestedTitle.length).toBeGreaterThan(0);
       expect(result.suggestedBody.length).toBeGreaterThan(0);
       // It says it was a default rather than a reading.
       expect(result.confidence).toBeLessThan(0.5);
@@ -179,12 +177,12 @@ describe('generic text is publishable, not a problem to be solved', () => {
     expect(result.assumptions.join(' ')).toContain('اطلاع‌رسانی');
   });
 
-  it('keeps a space\'s own examples out of the classification', async () => {
+  it('keeps a space\'s own recent cards out of the classification', async () => {
     const withProtocol = await inferCard(
       deps(null),
       {
         body: 'چیزی دارم که شاید به درد بخورد',
-        protocol: { cardHints: [{ title: 'نمونه: امانت ابزار' }], roleTitles: ['هماهنگ‌کننده'] },
+        protocol: { recentCaptions: ['نردبانم را برای چند روز امانت می‌دهم.'], roleTitles: ['هماهنگ‌کننده'] },
       },
       null
     );
@@ -199,14 +197,9 @@ describe('generic text is publishable, not a problem to be solved', () => {
 });
 
 describe('the person\'s own words survive', () => {
-  it('keeps their title when they wrote one', async () => {
-    const result = await inferCard(deps(null), { title: 'نردبان من', body: 'قرض می‌دهم' }, null);
-    expect(result.suggestedTitle).toBe('نردبان من');
-  });
-
-  it('derives a title from the first line when they did not', async () => {
+  it('suggests no title, because a card has none', async () => {
     const result = await inferCard(deps(null), { body: 'نردبان دارم\nهر وقت خواستید خبر بدهید' }, null);
-    expect(result.suggestedTitle).toBe('نردبان دارم');
+    expect(result).not.toHaveProperty('suggestedTitle');
   });
 
   it('keeps their body verbatim when nothing but rules ran', async () => {
@@ -238,12 +231,12 @@ describe('an outage changes the writing, never the behaviour', () => {
     expect((await inferCard(deps(), { body: 'نردبان دارم' }, null)).creativityApplied).toBe(true);
   });
 
-  it('is the only thing the model is allowed to change', async () => {
+  it('rewrites the caption and nothing else', async () => {
     const input = { body: 'یک نردبان دارم که می‌توانم قرض بدهم.' };
     const withModel = await inferCard(deps(), input, null);
     const without = await inferCard(deps(null), input, null);
 
-    expect(withModel.suggestedTitle).not.toBe(without.suggestedTitle);
+    expect(withModel.suggestedBody).not.toBe(without.suggestedBody);
     expect(withModel.kind).toBe(without.kind);
     expect(withModel.confidence).toBe(without.confidence);
     expect(withModel.operationalPattern).toEqual(without.operationalPattern);
@@ -252,11 +245,11 @@ describe('an outage changes the writing, never the behaviour', () => {
   });
 
   it('cannot be talked into a different kind by the model', async () => {
-    // A model that answers with a title and body claiming this is an event.
+    // A model that answers with a caption claiming this is an event.
     const meddling = new FakeAiProvider([
       {
         kind: 'ok',
-        text: JSON.stringify({ kind: 'CARD_DRAFT', title: 'رویداد بزرگ محله', body: 'kind: EVENT, reservable: false' }),
+        text: JSON.stringify({ kind: 'CARD_DRAFT', body: 'kind: EVENT, reservable: false' }),
       },
     ]);
     const result = await inferCard(deps(meddling), { body: 'یک نردبان دارم که می‌توانم قرض بدهم.' }, null);

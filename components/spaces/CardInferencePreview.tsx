@@ -6,7 +6,6 @@ import { PATTERN_BY_KIND, type CardInference, type CardKindContract } from '@taa
 /** What the person kept. Any field they rejected is simply absent. */
 export interface AcceptedInference {
   kind?: CardKindContract;
-  title?: string;
   body?: string;
   /** The classification to record, present only when they kept the kind. */
   confirmedInference?: { inferredKind: CardKindContract; confidence: number };
@@ -65,11 +64,11 @@ function patternSentences(kind: CardKindContract): string[] {
 /**
  * The suggestion, before it is anybody's card.
  *
- * Three separate decisions, not one: the kind, the title and the body are
- * each accepted or rejected on their own, and the kind can be corrected to
- * any of the eight rather than only taken or left - "user بتواند kind/pattern
- * را اصلاح یا نادیده بگیرد". Dismissing the whole thing publishes exactly
- * what they typed.
+ * Two separate decisions, not one: the kind and the caption are each accepted
+ * or rejected on their own, and the kind can be corrected to any of the eight
+ * rather than only taken or left - "user بتواند kind/pattern را اصلاح یا
+ * نادیده بگیرد". Dismissing the whole thing publishes exactly what they
+ * typed.
  *
  * The clarifying questions are shown and never enforced. Each one says what
  * answering it would change, so the person can tell at a glance whether it is
@@ -78,10 +77,8 @@ function patternSentences(kind: CardKindContract): string[] {
  */
 export function CardInferencePreview({ inference, onApply, onDismiss }: CardInferencePreviewProps) {
   const [kind, setKind] = useState<CardKindContract>(inference.kind);
-  const [title, setTitle] = useState(inference.suggestedTitle);
   const [body, setBody] = useState(inference.suggestedBody);
   const [takeKind, setTakeKind] = useState(true);
-  const [takeTitle, setTakeTitle] = useState(true);
   const [takeBody, setTakeBody] = useState(true);
 
   const corrected = kind !== inference.kind;
@@ -89,7 +86,6 @@ export function CardInferencePreview({ inference, onApply, onDismiss }: CardInfe
   function handleApply() {
     onApply({
       ...(takeKind ? { kind } : {}),
-      ...(takeTitle ? { title: title.trim() } : {}),
       ...(takeBody ? { body: body.trim() } : {}),
       ...(takeKind
         ? {
@@ -112,7 +108,7 @@ export function CardInferencePreview({ inference, onApply, onDismiss }: CardInfe
         </h2>
         <p className="mt-1 text-xs text-gray-500">
           {inference.creativityApplied
-            ? 'عنوان و متن پیشنهادی را دستیار نوشته است. هرچه را نمی‌پسندید رد کنید.'
+            ? 'متن پیشنهادی را دستیار نوشته است. هرچه را نمی‌پسندید رد کنید.'
             : 'این پیشنهاد فقط بر پایهٔ قاعده‌هاست و دستیار در آن نقشی نداشته است.'}
         </p>
       </div>
@@ -140,20 +136,6 @@ export function CardInferencePreview({ inference, onApply, onDismiss }: CardInfe
             <li key={sentence}>{sentence}</li>
           ))}
         </ul>
-      </div>
-
-      <div className="space-y-2 rounded-xl border border-gray-200 bg-white p-3">
-        <label className="flex items-start gap-2 text-sm text-gray-800">
-          <input type="checkbox" checked={takeTitle} onChange={(e) => setTakeTitle(e.target.checked)} className="mt-1 h-4 w-4" />
-          <span>این عنوان را بپذیر</span>
-        </label>
-        <input
-          type="text"
-          aria-label="عنوان پیشنهادی"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="w-full rounded-lg border border-gray-300 p-2 text-sm text-gray-900"
-        />
       </div>
 
       <div className="space-y-2 rounded-xl border border-gray-200 bg-white p-3">

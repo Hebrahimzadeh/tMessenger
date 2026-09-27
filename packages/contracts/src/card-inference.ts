@@ -84,8 +84,8 @@ export type ClarifyingQuestion = z.infer<typeof clarifyingQuestionSchema>;
  * What the inference proposes for one piece of text.
  *
  * Everything here is a proposal. The person can take the kind and reject the
- * title, take the title and reject the pattern, or ignore the whole thing and
- * publish exactly what they typed - "user بتواند kind/pattern را اصلاح یا
+ * caption, take the caption and reject the pattern, or ignore the whole thing
+ * and publish exactly what they typed - "user بتواند kind/pattern را اصلاح یا
  * نادیده بگیرد".
  *
  * `creativityApplied` is false when nothing but rules produced this, which
@@ -96,7 +96,7 @@ export type ClarifyingQuestion = z.infer<typeof clarifyingQuestionSchema>;
 export const cardInferenceSchema = z.object({
   kind: cardKindSchema,
   confidence: z.number().min(0).max(1),
-  suggestedTitle: z.string().min(1).max(200),
+  /** A caption they could accept as written. A card has no title to suggest. */
   suggestedBody: z.string().min(1).max(8000),
   /** What had to be assumed because the text did not say. Shown, never hidden. */
   assumptions: z.array(z.string().min(1).max(300)).max(6),
@@ -108,6 +108,5 @@ export type CardInference = z.infer<typeof cardInferenceSchema>;
 
 export const inferCardBodySchema = z.object({
   body: z.string().trim().min(1).max(8000),
-  title: z.string().trim().max(200).optional(),
 });
 export type InferCardBody = z.infer<typeof inferCardBodySchema>;

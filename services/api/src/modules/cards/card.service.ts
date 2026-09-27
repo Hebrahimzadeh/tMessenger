@@ -1,6 +1,5 @@
 import type { CardAttachmentKind, CardAttachmentStatus, CardKind, CardStatus, SpaceStatus } from '@taavon/database';
 import type { CardInference, CardLinkInput, CardLocationInput, ConfirmedInference } from '@taavon/contracts';
-import { deriveTitle } from './card-state-machine';
 import { inferCardKind } from './card-kind-inference';
 import { rankCards, type SpaceHealthStatusForRanking } from './card-ranking';
 
@@ -63,9 +62,17 @@ export interface CardRecord {
   kind: CardKind;
   status: CardStatus;
   publishedAt: Date;
-  latestRevision: { revisionNumber: number; title: string; body: string };
+  latestRevision: { revisionNumber: number; body: string };
   inferredKind: CardKind;
   attachments: CardAttachmentRecord[];
+}
+
+/** پسند، گفت‌وگو، نشان - everything a card's action bar needs to render itself for one reader. */
+export interface CardEngagementRecord {
+  likeCount: number;
+  commentCount: number;
+  likedByMe: boolean;
+  bookmarkedByMe: boolean;
 }
 
 export interface CardListRow {
@@ -73,17 +80,23 @@ export interface CardListRow {
   authorId: string;
   kind: CardKind;
   publishedAt: Date;
-  title: string;
+  /** The caption. Empty for a card that is only an image, a link or a place. */
   body: string;
   attachmentCount: number;
+  /** The object key of the card's first READY image, for the route to sign. Null when it has none. */
+  imageObjectKey: string | null;
+  /** Every reaction type together - what card ranking's small capped coefficient reads. */
   reactionCount: number;
+  likeCount: number;
+  commentCount: number;
+  likedByMe: boolean;
+  bookmarkedByMe: boolean;
 }
 
 export interface CreateCardInput {
   spaceId: string;
   authorId: string;
   body: string;
-  title?: string;
   kind?: CardKind;
   attachmentIds: string[];
   links: CardLinkInput[];
@@ -93,7 +106,13 @@ export interface CreateCardInput {
 }
 
 export interface SpaceProtocolRecord {
-  cardHints: { title: string; description?: string }[];
+  /**
+   * The captions of the space's own most recent cards - the protocol a draft
+   * should stay inside, read from what people actually posted rather than
+   * from templates on the space's definition. Empty for a space whose cards
+   * have all been removed.
+   */
+  recentCaptions: string[];
   roleTitles: string[];
 }
 
@@ -106,22 +125,23 @@ export interface SpaceProtocolRecord {
  */
 export interface CardInferencePort {
   infer(
-    input: { body: string; title?: string; protocol?: SpaceProtocolRecord },
+    input: { body: string; protocol?: SpaceProtocolRecord },
     requesterId: string | null
   ): Promise<CardInference>;
 }
 
 export interface CardRepository {
   getSpaceStatus(spaceId: string): Promise<SpaceStatus | null>;
-  /** The space's own example templates and role titles - the protocol a draft should stay inside. */
+  /** The space's own recent captions and role titles - the protocol a draft should stay inside. */
   getSpaceProtocol(spaceId: string): Promise<SpaceProtocolRecord | null>;
+  /** The card's like/comment/bookmark state for one reader (`viewerId` null for an anonymous one). */
+  getEngagement(cardId: string, viewerId: string | null): Promise<CardEngagementRecord>;
   /** Attachments referenced by id at create/update time - the service checks each is the caller's, READY, and unlinked. */
   findAttachmentsByIds(ids: string[]): Promise<CardAttachmentRecord[]>;
   createCard(input: {
     spaceId: string;
     authorId: string;
     kind: CardKind;
-    title: string;
     body: string;
     inferredKind: CardKind;
     confidence: number;
@@ -133,7 +153,6 @@ export interface CardRepository {
     cardId: string;
     editorId: string;
     kind: CardKind;
-    title: string;
     body: string;
     inferredKind: CardKind;
     confidence: number;
@@ -142,7 +161,10 @@ export interface CardRepository {
     locations: CardLocationInput[];
   }): Promise<{ revisionNumber: number }>;
   findCard(cardId: string): Promise<CardRecord | null>;
-  listCards(spaceId: string, params: { limit: number; before: { publishedAt: string; id: string } | null }): Promise<CardListRow[]>;
+  listCards(
+    spaceId: string,
+    params: { limit: number; before: { publishedAt: string; id: string } | null; viewerId: string | null }
+  ): Promise<CardListRow[]>;
   /** Null when no snapshot has ever been computed for the space (e.g. brand new) - ranking treats that the same as a healthy default. */
   getSpaceHealthStatus(spaceId: string): Promise<SpaceHealthStatusForRanking>;
 }
@@ -180,10 +202,11 @@ async function resolveFileAttachments(
 }
 
 /**
- * "متن تنها یا پیوست معنادار کافی؛ kind اجباری نیست" - a card needs body
- * text OR at least one meaningful attachment (a finalized file, a link, or
- * a location); the author never has to pick a kind (it defaults AWARENESS
- * and a rule-based `inferredKind` is kept alongside).
+ * "متن تنها یا پیوست معنادار کافی؛ kind اجباری نیست" - a card needs a
+ * caption OR at least one meaningful attachment (a finalized file, a link,
+ * or a location); the author never has to pick a kind (it defaults AWARENESS
+ * and a rule-based `inferredKind` is kept alongside). Nothing here derives a
+ * name for the card: it does not have one.
  */
 export async function createCard(
   repo: CardRepository,
@@ -206,7 +229,6 @@ export async function createCard(
     spaceId: input.spaceId,
     authorId: input.authorId,
     kind: input.kind ?? 'AWARENESS',
-    title: deriveTitle(input.title, input.body),
     body: input.body,
     inferredKind,
     confidence,
@@ -218,7 +240,7 @@ export async function createCard(
 
 /**
  * An edit is always a new immutable revision - "edit revision و outbox
- * event بسازد". Only the author may edit. Text (body/title/kind) is
+ * event بسازد". Only the author may edit. Text (the caption) and `kind` are
  * replaced and the semantic profile recomputed; `attachmentIds`/`links`/
  * `locations` on an update *add* to the card - Task 14 does not remove
  * existing attachments (nothing physical is ever deleted).
@@ -227,7 +249,7 @@ export async function updateCard(
   repo: CardRepository,
   cardId: string,
   editorId: string,
-  input: { body: string; title?: string; kind?: CardKind; attachmentIds: string[]; links: CardLinkInput[]; locations: CardLocationInput[] }
+  input: { body: string; kind?: CardKind; attachmentIds: string[]; links: CardLinkInput[]; locations: CardLocationInput[] }
 ): Promise<{ revisionNumber: number }> {
   const card = await repo.findCard(cardId);
   if (!card) throw new CardNotFoundError();
@@ -254,7 +276,6 @@ export async function updateCard(
     cardId,
     editorId,
     kind: input.kind ?? card.kind,
-    title: deriveTitle(input.title, input.body),
     body: input.body,
     inferredKind,
     confidence,
@@ -284,14 +305,14 @@ export async function updateCard(
 export async function inferCardDraft(
   repo: CardRepository,
   port: CardInferencePort,
-  input: { spaceId: string; body: string; title?: string; requesterId: string | null }
+  input: { spaceId: string; body: string; requesterId: string | null }
 ): Promise<CardInference> {
   const spaceStatus = await repo.getSpaceStatus(input.spaceId);
   if (spaceStatus === null) throw new SpaceNotFoundForCardError();
   if (spaceStatus !== 'PUBLISHED') throw new SpaceNotAcceptingCardsError(spaceStatus);
 
   const protocol = (await repo.getSpaceProtocol(input.spaceId)) ?? undefined;
-  return port.infer({ body: input.body, title: input.title, protocol }, input.requesterId);
+  return port.infer({ body: input.body, protocol }, input.requesterId);
 }
 
 export async function getCard(repo: CardRepository, cardId: string): Promise<CardRecord> {
@@ -323,13 +344,13 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export async function listCards(
   repo: CardRepository,
   spaceId: string,
-  params: { limit: number; cursor?: string; now?: Date }
+  params: { limit: number; cursor?: string; now?: Date; viewerId?: string | null }
 ): Promise<CardListResult> {
   const spaceStatus = await repo.getSpaceStatus(spaceId);
   if (spaceStatus !== 'PUBLISHED') throw new SpaceNotFoundForCardError();
 
   const before = params.cursor ? decodeCursor(params.cursor) : null;
-  const rows = await repo.listCards(spaceId, { limit: params.limit + 1, before });
+  const rows = await repo.listCards(spaceId, { limit: params.limit + 1, before, viewerId: params.viewerId ?? null });
   const hasMore = rows.length > params.limit;
   const page = rows.slice(0, params.limit);
   const last = page[page.length - 1];

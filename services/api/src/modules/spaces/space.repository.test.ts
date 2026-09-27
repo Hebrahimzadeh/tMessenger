@@ -48,6 +48,15 @@ describe.skipIf(!databaseAvailable)('SpaceRepository: real Postgres', () => {
     const spaceIds = (await getPrisma().space.findMany({ where: { creatorId: { in: [userId, otherUserId] } }, select: { id: true } })).map(
       (s) => s.id
     );
+    // The three opening cards a built space comes with, and everything hanging off them.
+    const cardIds = (await getPrisma().card.findMany({ where: { spaceId: { in: spaceIds } }, select: { id: true } })).map((c) => c.id);
+    await getPrisma().cardCommentRevision.deleteMany({ where: { comment: { cardId: { in: cardIds } } } });
+    await getPrisma().cardComment.deleteMany({ where: { cardId: { in: cardIds } } });
+    await getPrisma().cardEvent.deleteMany({ where: { cardId: { in: cardIds } } });
+    await getPrisma().cardSemanticProfile.deleteMany({ where: { cardId: { in: cardIds } } });
+    await getPrisma().cardRevision.deleteMany({ where: { cardId: { in: cardIds } } });
+    await getPrisma().outboxEvent.deleteMany({ where: { aggregateId: { in: cardIds } } });
+    await getPrisma().card.deleteMany({ where: { id: { in: cardIds } } });
     await getPrisma().spaceParticipationRole.deleteMany({ where: { spaceId: { in: spaceIds } } });
     await getPrisma().spaceDefinitionVersion.deleteMany({ where: { spaceId: { in: spaceIds } } });
     await getPrisma().outboxEvent.deleteMany({ where: { aggregateId: { in: spaceIds } } });
@@ -71,6 +80,102 @@ describe.skipIf(!databaseAvailable)('SpaceRepository: real Postgres', () => {
     const event = await getPrisma().outboxEvent.findFirst({ where: { aggregateId: id, eventType: 'space.created' } });
     expect(event).not.toBeNull();
     expect(event?.payload).toMatchObject({ spaceId: id, slug: 'baagh-mahalle-test' });
+  });
+
+  it('createBuiltSpace opens the space with three real cards, each with one comment, in one transaction', async () => {
+    const repo = createPrismaSpaceRepository(getPrisma());
+    const openingCards = [
+      { caption: 'این بستر را ساختم تا وسایل کم‌استفاده بی‌کار نمانند.', comment: 'چه وسیله‌ای دارید؟', kind: 'AWARENESS' as const, inferredKind: 'AWARENESS' as const, confidence: 0.2 },
+      { caption: 'چه وسیله‌ای دارید که ماه‌هاست به آن دست نزده‌اید؟', comment: 'نامش را بنویسید.', kind: 'AWARENESS' as const, inferredKind: 'REUSABLE_RESOURCE' as const, confidence: 0.7 },
+      { caption: 'به چه وسیله‌ای نیاز دارید؟', comment: 'مدتی که لازمش دارید را بنویسید.', kind: 'AWARENESS' as const, inferredKind: 'REQUEST' as const, confidence: 0.7 },
+    ];
+
+    const { id } = await repo.createBuiltSpace({
+      slug: 'built-with-opening-cards',
+      creatorId: userId,
+      title: 'امانت وسایل',
+      purpose: 'امانت‌دادن و امانت‌گرفتن وسایل کم‌استفاده میان همسایه‌ها.',
+      participationMethods: ['ثبت کارت وسیلهٔ قابل امانت'],
+      openingCards,
+      roles: TWO_PRIMARY_ROLES,
+      policyVersion: 1,
+      status: 'PUBLISHED',
+      verdict: 'ALLOW',
+      reason: 'بستر ساخته و منتشر شد.',
+      policyVersionRef: 'baseline:v1:8rules',
+      matchedPolicyRules: [],
+      documentRef: 'space-builder:v1:test',
+      creativityApplied: false,
+    });
+
+    // The order a visitor reads them in: the feed sorts by publishedAt
+    // descending, and these are written so the first one is the newest.
+    const cards = await getPrisma().card.findMany({
+      where: { spaceId: id },
+      orderBy: { publishedAt: 'desc' },
+      include: { revisions: true, semanticProfile: true, comments: { include: { revisions: true } } },
+    });
+
+    expect(cards).toHaveLength(3);
+    for (const [index, card] of cards.entries()) {
+      // A real card by a real person - the creator, never an invented account.
+      expect(card.authorId).toBe(userId);
+      expect(card.status).toBe('ACTIVE');
+      expect(card.revisions).toHaveLength(1);
+      expect(card.revisions[0]!.body).toBe(openingCards[index]!.caption);
+      expect(card.semanticProfile?.inferredKind).toBe(openingCards[index]!.inferredKind);
+      // One comment under each, so the conversation has visibly started.
+      expect(card.comments).toHaveLength(1);
+      expect(card.comments[0]!.authorId).toBe(userId);
+      expect(card.comments[0]!.revisions[0]!.body).toBe(openingCards[index]!.comment);
+    }
+
+    // Distinct instants, so the three never shuffle: Postgres freezes now()
+    // for the whole transaction, and a tie would be broken by random uuid.
+    expect(new Set(cards.map((card) => card.publishedAt.getTime())).size).toBe(3);
+
+    // The same rows an ordinary card write produces, because these are ordinary cards.
+    const cardIds = cards.map((c) => c.id);
+    const events = await getPrisma().cardEvent.findMany({ where: { cardId: { in: cardIds } } });
+    expect(events.filter((e) => e.eventType === 'card.created')).toHaveLength(3);
+    expect(events.filter((e) => e.eventType === 'card.comment_created')).toHaveLength(3);
+    const awareness = await getPrisma().awarenessEvent.findMany({ where: { subjectId: { in: cardIds } } });
+    expect(awareness.filter((e) => e.type === 'PRODUCED')).toHaveLength(3);
+    expect(awareness.filter((e) => e.type === 'PUBLIC_CONTRIBUTION')).toHaveLength(3);
+  });
+
+  it('createBuiltSpace leaves no space and no cards behind when one opening card cannot be written', async () => {
+    const repo = createPrismaSpaceRepository(getPrisma());
+
+    await expect(
+      repo.createBuiltSpace({
+        slug: 'built-but-rolled-back',
+        creatorId: userId,
+        title: 'امانت وسایل',
+        purpose: 'p',
+        participationMethods: ['m'],
+        openingCards: [
+          { caption: 'c1', comment: 'c', kind: 'AWARENESS', inferredKind: 'AWARENESS', confidence: 0.2 },
+          // The first card is written, then this one fails on the enum - so the
+          // failure lands half-way through, which is the case worth testing.
+          { caption: 'c2', comment: 'c', kind: 'NOT_A_KIND' as never, inferredKind: 'AWARENESS', confidence: 0.2 },
+        ],
+        roles: TWO_PRIMARY_ROLES,
+        policyVersion: 1,
+        status: 'PUBLISHED',
+        verdict: 'ALLOW',
+        reason: 'r',
+        policyVersionRef: 'baseline:v1:8rules',
+        matchedPolicyRules: [],
+        documentRef: 'space-builder:v1:test',
+        creativityApplied: false,
+      })
+    ).rejects.toThrow();
+
+    // Either the person has a space that is already a conversation, or they
+    // have no space at all.
+    expect(await getPrisma().space.findUnique({ where: { slug: 'built-but-rolled-back' } })).toBeNull();
+    expect(await getPrisma().card.count({ where: { revisions: { some: { body: { in: ['c1', 'c2'] } } } } })).toBe(0);
   });
 
   it('slugExists reflects real uniqueness', async () => {

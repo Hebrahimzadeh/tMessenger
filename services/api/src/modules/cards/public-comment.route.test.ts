@@ -11,6 +11,9 @@ import { createFakeRateLimiter } from '../auth/rate-limiter';
 import { publicCommentRoutes } from './public-comment.route';
 import type { CommentRecord, CommentRepository } from './public-comment.service';
 import type { ReactionRepository } from './reaction.service';
+import type { BookmarkRepository } from './bookmark.service';
+import type { CardListRow } from './card.service';
+import type { StorageProvider } from '../storage/storage-provider';
 import type { PinnedCardRecord, PinRepository } from './pin.service';
 
 const SESSION_HMAC_KEY = 'test-only-session-hmac-key';
@@ -86,7 +89,7 @@ function fakeReactionRepo(opts: { cardStatus?: CardStatus; spaceStatus?: SpaceSt
       return 'added';
     },
     async summary(cardId, userId) {
-      const counts = { SUPPORT: 0, USEFUL: 0, INTERESTED: 0, CELEBRATE: 0 };
+      const counts = { LIKE: 0, SUPPORT: 0, USEFUL: 0, INTERESTED: 0, CELEBRATE: 0 };
       const mine: CardReactionType[] = [];
       for (const key of reactions) {
         const [kCard, kUser, kType] = key.split(':') as [string, string, CardReactionType];
@@ -115,7 +118,7 @@ function fakePinRepo(): PinRepository {
       return pins.has(cardId);
     },
     async pin({ cardId, position }) {
-      pins.set(cardId, { cardId, position, title: 'کارت', pinnedAt: new Date() });
+      pins.set(cardId, { cardId, position, caption: 'کارت', pinnedAt: new Date() });
     },
     async unpin({ cardId }) {
       return pins.delete(cardId);
@@ -126,9 +129,62 @@ function fakePinRepo(): PinRepository {
   };
 }
 
+function fakeBookmarkRepo(opts: { cardStatus?: CardStatus; spaceStatus?: SpaceStatus } = {}): BookmarkRepository {
+  const cardStatus: CardStatus = opts.cardStatus ?? 'ACTIVE';
+  const spaceStatus: SpaceStatus = opts.spaceStatus ?? 'PUBLISHED';
+  /** Insertion order stands in for "newest saved first" once reversed. */
+  const saved = new Map<string, { cardId: string; userId: string; at: number }>();
+  let clock = 0;
+
+  return {
+    async getCardContext(cardId) {
+      return cardId === CARD ? { cardStatus, spaceStatus } : null;
+    },
+    async toggle(cardId, userId) {
+      const key = `${cardId}:${userId}`;
+      if (saved.has(key)) {
+        saved.delete(key);
+        return 'removed';
+      }
+      saved.set(key, { cardId, userId, at: (clock += 1) });
+      return 'added';
+    },
+    async isBookmarked(cardId, userId) {
+      return saved.has(`${cardId}:${userId}`);
+    },
+    async listByUser(userId, { limit }) {
+      const mine = [...saved.values()].filter((row) => row.userId === userId).sort((a, b) => b.at - a.at);
+      const rows: CardListRow[] = mine.slice(0, limit).map((row) => ({
+        id: row.cardId,
+        authorId: AUTHOR,
+        kind: 'AWARENESS',
+        publishedAt: new Date('2026-09-20T00:00:00.000Z'),
+        body: 'کارتی که نشان کردم',
+        attachmentCount: 1,
+        imageObjectKey: `users/${AUTHOR}/card-uploads/one.png`,
+        reactionCount: 0,
+        likeCount: 0,
+        commentCount: 0,
+        likedByMe: false,
+        bookmarkedByMe: true,
+      }));
+      return { rows, lastBookmark: null };
+    },
+  };
+}
+
+const fakeStorage: StorageProvider = {
+  async putPrivate() {},
+  async getSignedRead(objectKey) {
+    return `https://storage.example/signed/${objectKey}`;
+  },
+  async delete() {},
+};
+
 function buildApp(overrides: {
   commentRepository?: CommentRepository;
   reactionRepository?: ReactionRepository;
+  bookmarkRepository?: BookmarkRepository;
   pinRepository?: PinRepository;
 }) {
   const app = Fastify();
@@ -143,8 +199,10 @@ function buildApp(overrides: {
   app.register(publicCommentRoutes, {
     prefix: '/v1',
     sessionHmacKey: SESSION_HMAC_KEY,
+    storageProvider: fakeStorage,
     commentRepository: overrides.commentRepository ?? fakeCommentRepo(),
     reactionRepository: overrides.reactionRepository ?? fakeReactionRepo(),
+    bookmarkRepository: overrides.bookmarkRepository ?? fakeBookmarkRepo(),
     pinRepository: overrides.pinRepository ?? fakePinRepo(),
     reactionRateLimiter: createFakeRateLimiter(100, 60),
   });
@@ -240,6 +298,7 @@ describe('reactions over HTTP', () => {
     limitedApp.register(publicCommentRoutes, {
       prefix: '/v1',
       sessionHmacKey: SESSION_HMAC_KEY,
+      storageProvider: fakeStorage,
       reactionRepository: fakeReactionRepo(),
       reactionRateLimiter: createFakeRateLimiter(1, 60),
     });
@@ -290,6 +349,72 @@ describe('pins over HTTP', () => {
 
     const unpinned = await app.inject({ method: 'DELETE', url: `/v1/cards/${CARD}/pin`, cookies: cookieFor(AUTHOR) });
     expect(unpinned.json().items).toHaveLength(0);
+
+    await app.close();
+  });
+});
+
+describe('bookmarks over HTTP', () => {
+  it('needs a session even to read, because a bookmark is nobody else\'s business', async () => {
+    const app = buildApp({});
+
+    const anonymousRead = await app.inject({ method: 'GET', url: `/v1/cards/${CARD}/bookmark` });
+    expect(anonymousRead.statusCode).toBe(401);
+    const anonymousWrite = await app.inject({ method: 'POST', url: `/v1/cards/${CARD}/bookmark` });
+    expect(anonymousWrite.statusCode).toBe(401);
+    const anonymousList = await app.inject({ method: 'GET', url: '/v1/me/bookmarks' });
+    expect(anonymousList.statusCode).toBe(401);
+
+    await app.close();
+  });
+
+  it('toggles idempotently, reports no count, and stays out of everyone else\'s view', async () => {
+    const app = buildApp({});
+
+    const on = await app.inject({ method: 'POST', url: `/v1/cards/${CARD}/bookmark`, cookies: cookieFor(AUTHOR) });
+    expect(on.statusCode).toBe(200);
+    expect(on.json()).toEqual({ bookmarked: true });
+
+    // No number anywhere: a bookmark is never a popularity signal.
+    expect(Object.keys(on.json())).toEqual(['bookmarked']);
+
+    const someoneElse = await app.inject({ method: 'GET', url: `/v1/cards/${CARD}/bookmark`, cookies: cookieFor(STRANGER) });
+    expect(someoneElse.json()).toEqual({ bookmarked: false });
+
+    const off = await app.inject({ method: 'POST', url: `/v1/cards/${CARD}/bookmark`, cookies: cookieFor(AUTHOR) });
+    expect(off.json()).toEqual({ bookmarked: false });
+
+    await app.close();
+  });
+
+  it('refuses to bookmark a card whose space is no longer public', async () => {
+    const app = buildApp({ bookmarkRepository: fakeBookmarkRepo({ spaceStatus: 'TEMPORARILY_SUSPENDED' }) });
+    const response = await app.inject({ method: 'POST', url: `/v1/cards/${CARD}/bookmark`, cookies: cookieFor(AUTHOR) });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error.code).toBe('BOOKMARKS_NOT_ACCEPTED');
+    await app.close();
+  });
+
+  it('lists the caller\'s own shelf, with each card\'s image signed like any other stored file', async () => {
+    const app = buildApp({});
+    await app.inject({ method: 'POST', url: `/v1/cards/${CARD}/bookmark`, cookies: cookieFor(AUTHOR) });
+
+    const list = await app.inject({ method: 'GET', url: '/v1/me/bookmarks', cookies: cookieFor(AUTHOR) });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().items).toHaveLength(1);
+    expect(list.json().items[0]).toMatchObject({
+      id: CARD,
+      body: 'کارتی که نشان کردم',
+      imageUrl: `https://storage.example/signed/users/${AUTHOR}/card-uploads/one.png`,
+      engagement: { bookmarkedByMe: true },
+    });
+    // A card has no title, so no row carries one.
+    expect(list.json().items[0]).not.toHaveProperty('title');
+
+    // Somebody else's shelf is their own and is empty.
+    const other = await app.inject({ method: 'GET', url: '/v1/me/bookmarks', cookies: cookieFor(STRANGER) });
+    expect(other.json().items).toHaveLength(0);
 
     await app.close();
   });

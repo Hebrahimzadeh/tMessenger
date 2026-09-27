@@ -224,6 +224,7 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
   app.register(publicCommentRoutes, {
     prefix: '/v1',
     sessionHmacKey: 'test-only-default-session-hmac-key-not-for-prod',
+    storageProvider: resolvedStorageProvider,
     ...publicComments,
   });
   app.register(reservationRoutes, {

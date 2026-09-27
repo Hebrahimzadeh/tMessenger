@@ -8,7 +8,6 @@ function inference(overrides: Partial<CardInference> = {}): CardInference {
   return {
     kind: 'REUSABLE_RESOURCE',
     confidence: 0.7,
-    suggestedTitle: 'نردبان برای امانت',
     suggestedBody: 'یک نردبان دارم که می‌توانم قرض بدهم.',
     assumptions: ['پس از بسته‌شدن، این کارت دوباره فعال نمی‌شود؛ دفعهٔ بعد کارت تازه‌ای بسازید.'],
     creativityApplied: true,
@@ -56,26 +55,29 @@ describe('nothing is applied without the person saying so', () => {
 
     expect(onApply.mock.calls[0]![0]).toEqual({
       kind: 'REUSABLE_RESOURCE',
-      title: 'نردبان برای امانت',
       body: 'یک نردبان دارم که می‌توانم قرض بدهم.',
       confirmedInference: { inferredKind: 'REUSABLE_RESOURCE', confidence: 0.7 },
     });
   });
 });
 
-describe('the kind, the title and the body are three separate decisions', () => {
+describe('the kind and the caption are two separate decisions', () => {
   it('takes the kind while rejecting the wording', async () => {
     const user = userEvent.setup();
     const { onApply } = renderPreview();
 
-    await user.click(screen.getByRole('checkbox', { name: 'این عنوان را بپذیر' }));
     await user.click(screen.getByRole('checkbox', { name: 'این متن را بپذیر' }));
     await user.click(screen.getByRole('button', { name: 'اعمال موارد انتخاب‌شده' }));
 
     const accepted = onApply.mock.calls[0]![0];
     expect(accepted.kind).toBe('REUSABLE_RESOURCE');
-    expect(accepted.title).toBeUndefined();
     expect(accepted.body).toBeUndefined();
+  });
+
+  it('offers no title to accept, because a card has none', () => {
+    renderPreview();
+    expect(screen.queryByRole('checkbox', { name: /عنوان/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/عنوان/)).not.toBeInTheDocument();
   });
 
   it('takes the wording while rejecting the kind', async () => {
@@ -90,19 +92,19 @@ describe('the kind, the title and the body are three separate decisions', () => 
     // Nothing is recorded on the card's profile either, because they never
     // agreed to a classification.
     expect(accepted.confirmedInference).toBeUndefined();
-    expect(accepted.title).toBe('نردبان برای امانت');
+    expect(accepted.body).toBe('یک نردبان دارم که می‌توانم قرض بدهم.');
   });
 
-  it('lets the suggested title be rewritten before it is taken', async () => {
+  it('lets the suggested caption be rewritten before it is taken', async () => {
     const user = userEvent.setup();
     const { onApply } = renderPreview();
 
-    const field = screen.getByLabelText('عنوان پیشنهادی');
+    const field = screen.getByLabelText('متن پیشنهادی');
     await user.clear(field);
-    await user.type(field, 'نردبان سه‌متری');
+    await user.type(field, 'نردبان سه‌متری دارم.');
     await user.click(screen.getByRole('button', { name: 'اعمال موارد انتخاب‌شده' }));
 
-    expect(onApply.mock.calls[0]![0].title).toBe('نردبان سه‌متری');
+    expect(onApply.mock.calls[0]![0].body).toBe('نردبان سه‌متری دارم.');
   });
 });
 

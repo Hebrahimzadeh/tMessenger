@@ -7,7 +7,7 @@ import { cardResponseSchema, spaceResponseSchema } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { renderPlainTextWithLinks } from '@/lib/linkify';
 import { useCurrentUserId } from '@/hooks/useCurrentUserId';
-import { CardReactions } from './CardReactions';
+import { CardActionBar } from './CardActionBar';
 import { DuplicateCardAction } from './DuplicateCardAction';
 import { MediaPreview } from './MediaPreview';
 import { PublicThread } from './PublicThread';
@@ -34,6 +34,7 @@ export function CardDetailView({ cardId }: CardDetailViewProps) {
   const [gate, setGate] = useState<GateState>({ status: 'loading' });
   const currentUser = useCurrentUserId();
   const viewRecorded = useRef<string | null>(null);
+  const threadRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,32 +104,35 @@ export function CardDetailView({ cardId }: CardDetailViewProps) {
         بازگشت به بستر
       </Link>
 
-      <article className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-        <h1 className="mb-2 text-lg font-semibold text-gray-900">{card.revision.title}</h1>
-        {card.revision.body && (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
-            {renderPlainTextWithLinks(card.revision.body)}
-          </p>
-        )}
+      {/* No heading: a card has no title, so the caption is the first thing
+          read, exactly as it is in the feed. */}
+      <article className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
         {card.attachments.length > 0 && (
-          <div className="mt-3 space-y-2">
+          <div className="space-y-2 p-4 pb-0">
             {card.attachments.map((attachment) => (
               <MediaPreview key={attachment.id} item={{ source: 'remote', attachment }} />
             ))}
           </div>
         )}
+        {card.revision.body && (
+          <p className="whitespace-pre-wrap p-4 text-sm leading-relaxed text-gray-800">
+            {renderPlainTextWithLinks(card.revision.body)}
+          </p>
+        )}
+        <CardActionBar
+          cardId={card.id}
+          engagement={card.engagement}
+          currentUserId={userId}
+          onCommentClick={() => threadRef.current?.scrollIntoView({ behavior: 'smooth' })}
+        />
       </article>
-
-      <section className="mt-3">
-        <CardReactions cardId={card.id} currentUserId={userId} />
-      </section>
 
       <section className="mt-3 space-y-2">
         <ReservationActions cardId={card.id} cardAuthorId={card.authorId} currentUserId={userId} />
         <DuplicateCardAction spaceId={card.spaceId} cardAuthorId={card.authorId} currentUserId={userId} originalBody={card.revision.body} />
       </section>
 
-      <section className="mt-6">
+      <section ref={threadRef} className="mt-6">
         <h2 className="mb-2 text-sm font-semibold text-gray-800">گفت‌وگوی عمومی</h2>
         <PublicThread cardId={card.id} currentUserId={userId} canModerate={canModerate} />
       </section>

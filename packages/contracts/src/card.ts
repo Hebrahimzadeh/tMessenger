@@ -25,8 +25,14 @@ export type CardAttachmentKindContract = z.infer<typeof cardAttachmentKindSchema
 export const cardAttachmentStatusSchema = z.enum(['PENDING', 'PROCESSING', 'READY', 'REJECTED']);
 export type CardAttachmentStatusContract = z.infer<typeof cardAttachmentStatusSchema>;
 
+/**
+ * A card has no name and no title, by decision (owner, 2026-09-27 - see
+ * `docs/decisions/2026-09-27-cards-are-caption-first.md`). `body` is the
+ * caption: what the person wrote under what they are showing. It is the only
+ * text a card has, and it is optional whenever there is an attachment - an
+ * image on its own is a whole card, and so is a caption on its own.
+ */
 const BODY_MAX = 8000;
-const TITLE_MAX = 200;
 
 export const cardLinkInputSchema = z.object({
   url: z.string().trim().url().max(2000),
@@ -44,8 +50,8 @@ export type CardLocationInput = z.infer<typeof cardLocationInputSchema>;
 /**
  * What the person confirmed after previewing an inference.
  *
- * Deliberately narrow: only the classification is carried, because the title
- * and body they accepted are already in the ordinary create fields by then.
+ * Deliberately narrow: only the classification is carried, because the
+ * caption they accepted is already in the ordinary create fields by then.
  * This is what lands in `CardSemanticProfile` - "نتیجهٔ تأییدشده را به
  * CardSemanticProfile وصل کن" - so the profile records what a person agreed
  * to rather than what a keyword pass guessed a second time.
@@ -61,11 +67,10 @@ export const confirmedInferenceSchema = z.object({
 });
 export type ConfirmedInference = z.infer<typeof confirmedInferenceSchema>;
 
-/** "متن تنها یا پیوست معنادار کافی" - a card needs *something*: body text, at least one finalized file attachment, a link, or a location. `kind` is never required ("user مجبور به انتخاب نیست"). */
+/** "متن تنها یا پیوست معنادار کافی" - a card needs *something*: a caption, at least one finalized file attachment, a link, or a location. `kind` is never required ("user مجبور به انتخاب نیست"). */
 export const createCardBodySchema = z
   .object({
     body: z.string().trim().max(BODY_MAX).default(''),
-    title: z.string().trim().max(TITLE_MAX).optional(),
     kind: cardKindSchema.optional(),
     attachmentIds: z.array(z.string().uuid()).max(20).default([]),
     links: z.array(cardLinkInputSchema).max(20).default([]),
@@ -89,7 +94,6 @@ export type CreateCardBody = z.infer<typeof createCardBodySchema>;
 export const updateCardBodySchema = z
   .object({
     body: z.string().trim().max(BODY_MAX).default(''),
-    title: z.string().trim().max(TITLE_MAX).optional(),
     kind: cardKindSchema.optional(),
     attachmentIds: z.array(z.string().uuid()).max(20).default([]),
     links: z.array(cardLinkInputSchema).max(20).default([]),
@@ -134,6 +138,26 @@ export const cardAttachmentViewSchema = z.object({
 });
 export type CardAttachmentView = z.infer<typeof cardAttachmentViewSchema>;
 
+/**
+ * The four things a card carries besides its image and caption, as one
+ * block: پسند، گفت‌وگو، هم‌رسانی، نشان.
+ *
+ * It travels with the card rather than being fetched per card, because a
+ * feed of twenty cards should not be twenty extra requests before anybody
+ * can see whether they already liked something. `bookmarkedByMe` has no
+ * public counterpart on purpose - a bookmark is private to the person who
+ * made it and is never a popularity signal ("واکنش و پسند فقط سیگنال ضعیف
+ * کشف است", §4.1's own ceiling on what engagement may become).
+ */
+export const cardEngagementSchema = z.object({
+  likeCount: z.number().int().nonnegative(),
+  commentCount: z.number().int().nonnegative(),
+  /** False for an anonymous reader - they have no likes to report. */
+  likedByMe: z.boolean(),
+  bookmarkedByMe: z.boolean(),
+});
+export type CardEngagement = z.infer<typeof cardEngagementSchema>;
+
 export const cardResponseSchema = z.object({
   id: z.string().uuid(),
   spaceId: z.string().uuid(),
@@ -143,12 +167,13 @@ export const cardResponseSchema = z.object({
   publishedAt: z.string().datetime(),
   revision: z.object({
     revisionNumber: z.number().int().positive(),
-    title: z.string(),
+    /** The caption. Empty when the card is an image (or a link, or a place) with nothing written under it. */
     body: z.string(),
   }),
   /** The rule-based guess kept alongside `kind`, never replacing it. */
   inferredKind: cardKindSchema,
   attachments: z.array(cardAttachmentViewSchema),
+  engagement: cardEngagementSchema,
 });
 export type CardResponse = z.infer<typeof cardResponseSchema>;
 
@@ -157,9 +182,12 @@ export const cardListItemSchema = z.object({
   authorId: z.string().uuid(),
   kind: cardKindSchema,
   publishedAt: z.string().datetime(),
-  title: z.string(),
+  /** The caption, possibly empty. There is no title to fall back on. */
   body: z.string(),
   attachmentCount: z.number().int(),
+  /** A signed, time-limited read URL for the card's first READY image, or null when it has none. */
+  imageUrl: z.string().nullable(),
+  engagement: cardEngagementSchema,
 });
 export type CardListItem = z.infer<typeof cardListItemSchema>;
 
@@ -168,3 +196,9 @@ export const cardListResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type CardListResponse = z.infer<typeof cardListResponseSchema>;
+
+/** `POST|GET /cards/:id/bookmark` - the caller's own bookmark, which nobody else can see. */
+export const bookmarkStateSchema = z.object({
+  bookmarked: z.boolean(),
+});
+export type BookmarkState = z.infer<typeof bookmarkStateSchema>;

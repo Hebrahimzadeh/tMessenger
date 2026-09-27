@@ -34,7 +34,9 @@ import {
   SpaceNotAcceptingCardsError,
   SpaceNotFoundForCardError,
   updateCard,
+  type CardEngagementRecord,
   type CardInferencePort,
+  type CardListRow,
   type CardRecord,
   type CardRepository,
 } from './card.service';
@@ -53,7 +55,11 @@ export interface CardRouteOptions {
 
 const LIST_PAGE_SIZE = 20;
 
-async function toCardResponse(card: CardRecord, storage: StorageProvider) {
+async function toCardResponse(
+  card: CardRecord,
+  storage: StorageProvider,
+  engagement: CardEngagementRecord
+) {
   // "فایل READYنشده در کارت نمایش داده نشود؛ فایل rejected هرگز signed read
   // URL نگیرد" - only READY attachments are rendered at all, and a signed
   // URL is minted solely for one that has an object key (a stored file);
@@ -84,12 +90,35 @@ async function toCardResponse(card: CardRecord, storage: StorageProvider) {
     publishedAt: card.publishedAt.toISOString(),
     revision: {
       revisionNumber: card.latestRevision.revisionNumber,
-      title: card.latestRevision.title,
       body: card.latestRevision.body,
     },
     inferredKind: card.inferredKind,
     attachments,
+    engagement,
   });
+}
+
+/**
+ * One feed row: the image (signed on the way out, like any other stored
+ * file), the caption, and the four actions' current state. No title, because
+ * a card does not have one - "کارت نام و عنوان ندارد".
+ */
+export async function toCardListItem(row: CardListRow, storage: StorageProvider) {
+  return {
+    id: row.id,
+    authorId: row.authorId,
+    kind: row.kind,
+    publishedAt: row.publishedAt.toISOString(),
+    body: row.body,
+    attachmentCount: row.attachmentCount,
+    imageUrl: row.imageObjectKey ? await storage.getSignedRead(row.imageObjectKey) : null,
+    engagement: {
+      likeCount: row.likeCount,
+      commentCount: row.commentCount,
+      likedByMe: row.likedByMe,
+      bookmarkedByMe: row.bookmarkedByMe,
+    },
+  };
 }
 
 export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
@@ -130,7 +159,6 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
       const inference = await inferCardDraft(repo(), inferencePort(), {
         spaceId,
         body: body.body,
-        title: body.title,
         requesterId: user.userId,
       });
       return cardInferenceSchema.parse(inference);
@@ -150,7 +178,6 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
         spaceId,
         authorId: user.userId,
         body: body.body,
-        title: body.title,
         kind: body.kind,
         attachmentIds: body.attachmentIds,
         links: body.links,
@@ -158,7 +185,8 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
         confirmedInference: body.confirmedInference,
       });
       const card = await repo().findCard(id);
-      return reply.code(201).send(await toCardResponse(card!, opts.storageProvider));
+      const engagement = await repo().getEngagement(id, user.userId);
+      return reply.code(201).send(await toCardResponse(card!, opts.storageProvider, engagement));
     } catch (err) {
       return handleCardWriteError(err, request, reply);
     }
@@ -167,20 +195,20 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
   app.get('/spaces/:spaceId/cards', async (request, reply) => {
     const { spaceId } = request.params as { spaceId: string };
     const query = request.query as { cursor?: string };
-    getOptionalSession(request, opts.sessionHmacKey); // public list; no gate beyond the space being published
+    // A public list, with no gate beyond the space being published. The
+    // session is read all the same: whether *this* reader already liked or
+    // bookmarked a card is part of the row, and an anonymous reader simply
+    // gets false for both.
+    const viewer = getOptionalSession(request, opts.sessionHmacKey);
 
     try {
-      const result = await listCards(repo(), spaceId, { limit: LIST_PAGE_SIZE, cursor: query.cursor });
+      const result = await listCards(repo(), spaceId, {
+        limit: LIST_PAGE_SIZE,
+        cursor: query.cursor,
+        viewerId: viewer?.userId ?? null,
+      });
       return cardListResponseSchema.parse({
-        items: result.items.map((item) => ({
-          id: item.id,
-          authorId: item.authorId,
-          kind: item.kind,
-          publishedAt: item.publishedAt.toISOString(),
-          title: item.title,
-          body: item.body,
-          attachmentCount: item.attachmentCount,
-        })),
+        items: await Promise.all(result.items.map((item) => toCardListItem(item, opts.storageProvider))),
         nextCursor: result.nextCursor,
       });
     } catch (err) {
@@ -196,11 +224,12 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
 
   app.get('/cards/:cardId', async (request, reply) => {
     const { cardId } = request.params as { cardId: string };
-    getOptionalSession(request, opts.sessionHmacKey);
+    const viewer = getOptionalSession(request, opts.sessionHmacKey);
 
     try {
       const card = await getCard(repo(), cardId);
-      return toCardResponse(card, opts.storageProvider);
+      const engagement = await repo().getEngagement(cardId, viewer?.userId ?? null);
+      return toCardResponse(card, opts.storageProvider, engagement);
     } catch (err) {
       if (err instanceof CardNotFoundError) {
         return reply.code(404).send(apiError(request, 'CARD_NOT_FOUND', 'این کارت یافت نشد.'));
@@ -218,14 +247,14 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
     try {
       await updateCard(repo(), cardId, user.userId, {
         body: body.body,
-        title: body.title,
         kind: body.kind,
         attachmentIds: body.attachmentIds,
         links: body.links,
         locations: body.locations,
       });
       const card = await repo().findCard(cardId);
-      return toCardResponse(card!, opts.storageProvider);
+      const engagement = await repo().getEngagement(cardId, user.userId);
+      return toCardResponse(card!, opts.storageProvider, engagement);
     } catch (err) {
       return handleCardWriteError(err, request, reply);
     }

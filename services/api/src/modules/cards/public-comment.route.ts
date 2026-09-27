@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  bookmarkStateSchema,
+  cardListResponseSchema,
   commentListResponseSchema,
   commentViewSchema,
   createCommentBodySchema,
@@ -9,10 +11,25 @@ import {
   toggleReactionBodySchema,
 } from '@taavon/contracts';
 import { apiError } from '../../lib/api-error';
+import type { StorageProvider } from '../storage/storage-provider';
 import { getOptionalSession, requireSession } from '../auth/session-guard';
 import { createFakeRateLimiter, type RateLimiter } from '../auth/rate-limiter';
 import { createPrismaCommentRepository } from './public-comment.repository';
-import { createPrismaReactionRepository, createPrismaPinRepository } from './card-engagement.repository';
+import {
+  createPrismaBookmarkRepository,
+  createPrismaReactionRepository,
+  createPrismaPinRepository,
+} from './card-engagement.repository';
+import { toCardListItem } from './card.route';
+import {
+  BookmarksNotAcceptedError,
+  CardNotFoundForBookmarkError,
+  getBookmarkState,
+  InvalidBookmarkCursorError,
+  listBookmarkedCards,
+  toggleBookmark,
+  type BookmarkRepository,
+} from './bookmark.service';
 import {
   CardNotFoundForCommentError,
   CommentsNotAcceptedError,
@@ -53,8 +70,11 @@ export const REACTION_RATE_WINDOW_SECONDS = 60;
 
 export interface PublicCommentRouteOptions {
   sessionHmacKey: string;
+  /** Needed only to sign the image on a bookmarked card's row; every other route here is text. */
+  storageProvider: StorageProvider;
   commentRepository?: CommentRepository;
   reactionRepository?: ReactionRepository;
+  bookmarkRepository?: BookmarkRepository;
   pinRepository?: PinRepository;
   reactionRateLimiter?: RateLimiter;
 }
@@ -65,6 +85,9 @@ export async function publicCommentRoutes(app: FastifyInstance, opts: PublicComm
   }
   function reactionRepo(): ReactionRepository {
     return opts.reactionRepository ?? createPrismaReactionRepository(app.db);
+  }
+  function bookmarkRepo(): BookmarkRepository {
+    return opts.bookmarkRepository ?? createPrismaBookmarkRepository(app.db);
   }
   function pinRepo(): PinRepository {
     return opts.pinRepository ?? createPrismaPinRepository(app.db);
@@ -199,6 +222,57 @@ export async function publicCommentRoutes(app: FastifyInstance, opts: PublicComm
     }
   });
 
+  // --- bookmarks ---------------------------------------------------------
+  //
+  // Every one of these needs a session, including the read: a bookmark is
+  // the caller's own and there is no such thing as somebody else's view of
+  // it. Nothing here returns a count, so no route can turn a private "keep
+  // this" into a public number.
+
+  app.get('/cards/:cardId/bookmark', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const { cardId } = request.params as { cardId: string };
+
+    try {
+      return bookmarkStateSchema.parse(await getBookmarkState(bookmarkRepo(), cardId, user.userId));
+    } catch (err) {
+      return handleBookmarkError(err, request, reply);
+    }
+  });
+
+  app.post('/cards/:cardId/bookmark', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const { cardId } = request.params as { cardId: string };
+
+    try {
+      return bookmarkStateSchema.parse(await toggleBookmark(bookmarkRepo(), cardId, user.userId));
+    } catch (err) {
+      return handleBookmarkError(err, request, reply);
+    }
+  });
+
+  /** "نشان‌شده‌ها" - the caller's own shelf, in the order they saved things. */
+  app.get('/me/bookmarks', async (request, reply) => {
+    const user = requireSession(request, reply, opts.sessionHmacKey);
+    if (!user) return;
+    const query = request.query as { cursor?: string };
+
+    try {
+      const result = await listBookmarkedCards(bookmarkRepo(), user.userId, {
+        limit: LIST_PAGE_SIZE,
+        cursor: query.cursor,
+      });
+      return cardListResponseSchema.parse({
+        items: await Promise.all(result.items.map((item) => toCardListItem(item, opts.storageProvider))),
+        nextCursor: result.nextCursor,
+      });
+    } catch (err) {
+      return handleBookmarkError(err, request, reply);
+    }
+  });
+
   // --- pins -------------------------------------------------------------
 
   app.post('/cards/:cardId/pin', async (request, reply) => {
@@ -229,6 +303,19 @@ export async function publicCommentRoutes(app: FastifyInstance, opts: PublicComm
     const { spaceId } = request.params as { spaceId: string };
     return pinnedCardListResponseSchema.parse(await listPins(pinRepo(), spaceId));
   });
+}
+
+function handleBookmarkError(err: unknown, request: FastifyRequest, reply: FastifyReply) {
+  if (err instanceof CardNotFoundForBookmarkError) {
+    return reply.code(404).send(apiError(request, 'CARD_NOT_FOUND', 'این کارت یافت نشد.'));
+  }
+  if (err instanceof BookmarksNotAcceptedError) {
+    return reply.code(422).send(apiError(request, 'BOOKMARKS_NOT_ACCEPTED', 'این کارت قابل نشان‌کردن نیست.'));
+  }
+  if (err instanceof InvalidBookmarkCursorError) {
+    return reply.code(400).send(apiError(request, 'INVALID_CURSOR', 'نشانگر صفحه‌بندی معتبر نیست.'));
+  }
+  throw err;
 }
 
 function handlePinError(err: unknown, request: FastifyRequest, reply: FastifyReply) {

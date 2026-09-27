@@ -89,7 +89,7 @@ export const CARD_FIXTURES: CardFixture[] = [
     input: {
       body: 'چیزی دارم که شاید به درد بخورد',
       protocol: {
-        cardHints: [{ title: 'نمونه: اعلام آمادگی', description: 'من می‌توانم پنجشنبه‌ها کمک کنم.' }],
+        recentCaptions: ['من می‌توانم پنجشنبه‌ها کمک کنم.'],
         roleTitles: ['هماهنگ‌کننده', 'مشارکت‌کننده'],
       },
     },

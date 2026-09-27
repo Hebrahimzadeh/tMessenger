@@ -54,7 +54,6 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
       spaceId,
       authorId,
       kind: 'AWARENESS',
-      title: 'اطلاعیه',
       body: 'به کمک نیاز دارم برای جابه‌جایی',
       inferredKind: 'REQUEST',
       confidence: 0.7,
@@ -79,7 +78,6 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
       spaceId,
       authorId,
       kind: 'AWARENESS',
-      title: 'v1',
       body: 'نسخهٔ اول',
       inferredKind: 'AWARENESS',
       confidence: 0.2,
@@ -92,7 +90,6 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
       cardId: id,
       editorId: authorId,
       kind: 'OBSERVATION',
-      title: 'v2',
       body: 'نسخهٔ دوم',
       inferredKind: 'OBSERVATION',
       confidence: 0.7,
@@ -128,7 +125,6 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
       spaceId,
       authorId,
       kind: 'AWARENESS',
-      title: 'با عکس',
       body: 'عکس محله',
       inferredKind: 'AWARENESS',
       confidence: 0.2,
@@ -143,8 +139,7 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
         spaceId,
         authorId,
         kind: 'AWARENESS',
-        title: 'دوباره',
-        body: 'x',
+        body: 'دوباره',
         inferredKind: 'AWARENESS',
         confidence: 0.2,
         fileAttachmentIds: [attachmentId],
@@ -154,7 +149,7 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
     ).rejects.toThrow();
 
     // The failed create left nothing behind.
-    const strayCards = await getPrisma().card.findMany({ where: { spaceId, revisions: { some: { title: 'دوباره' } } } });
+    const strayCards = await getPrisma().card.findMany({ where: { spaceId, revisions: { some: { body: 'دوباره' } } } });
     expect(strayCards).toHaveLength(0);
   });
 
@@ -164,7 +159,6 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
         spaceId,
         authorId,
         kind: 'AWARENESS',
-        title: `c${i}`,
         body: `کارت ${i}`,
         inferredKind: 'AWARENESS',
         confidence: 0.2,
@@ -173,13 +167,14 @@ describe.skipIf(!databaseAvailable)('CardRepository / AttachmentRepository: real
         locations: [],
       });
     }
-    const firstTwo = await cardRepo.listCards(spaceId, { limit: 2, before: null });
+    const firstTwo = await cardRepo.listCards(spaceId, { limit: 2, before: null, viewerId: null });
     expect(firstTwo).toHaveLength(2);
 
     const last = firstTwo[firstTwo.length - 1]!;
     const rest = await cardRepo.listCards(spaceId, {
       limit: 5,
       before: { publishedAt: last.publishedAt.toISOString(), id: last.id },
+      viewerId: null,
     });
     const allIds = [...firstTwo, ...rest].map((c) => c.id);
     expect(new Set(allIds).size).toBe(3);

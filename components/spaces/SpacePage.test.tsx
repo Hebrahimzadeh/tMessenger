@@ -34,7 +34,6 @@ function fullSpace(overrides: Record<string, unknown> = {}) {
       purpose: 'نگهداری مشترک باغچه محله',
       audience: null,
       participationMethods: ['حضوری'],
-      cardHints: null,
       policyVersion: 1,
       roles: [
         { id: ROLE_ID, key: 'organizer', title: 'سازمان‌دهنده', description: null, isPrimary: true },
@@ -68,15 +67,16 @@ function mockFetchByUrl(handlers: Record<string, unknown>) {
 
 const EMPTY_CARDS_PAGE = { items: [], nextCursor: null };
 
-function card(id: string, title: string, body: string) {
+function card(id: string, caption: string) {
   return {
     id,
     authorId: '55555555-5555-4555-8555-555555555555',
     kind: 'REUSABLE_RESOURCE',
     publishedAt: '2026-09-10T00:00:00.000Z',
-    title,
-    body,
+    body: caption,
     attachmentCount: 0,
+    imageUrl: null,
+    engagement: { likeCount: 0, commentCount: 0, likedByMe: false, bookmarkedByMe: false },
   };
 }
 const EMPTY_PINS = { items: [], limit: 5 };
@@ -130,8 +130,8 @@ describe('SpacePage: a space looks like a conversation', () => {
       [`/spaces/${SPACE_ID}`]: fullSpace(),
       '/cards': {
         items: [
-          card('66666666-6666-4666-8666-666666666666', 'نردبان آلومینیومی', 'سه متری'),
-          card('77777777-7777-4777-8777-777777777777', 'دریل شارژی', 'رونیکس'),
+          card('66666666-6666-4666-8666-666666666666', 'نردبان آلومینیومی سه متری'),
+          card('77777777-7777-4777-8777-777777777777', 'دریل شارژی رونیکس'),
         ],
         nextCursor: null,
       },
@@ -139,23 +139,23 @@ describe('SpacePage: a space looks like a conversation', () => {
     });
     const user = userEvent.setup();
     render(<SpacePage idOrSlug={SPACE_ID} />);
-    await screen.findByText('نردبان آلومینیومی');
+    await screen.findByText('نردبان آلومینیومی سه متری');
 
     await user.type(screen.getByLabelText('جستجو در بستر'), 'دریل');
 
-    expect(screen.getByText('دریل شارژی')).toBeInTheDocument();
-    expect(screen.queryByText('نردبان آلومینیومی')).not.toBeInTheDocument();
+    expect(screen.getByText('دریل شارژی رونیکس')).toBeInTheDocument();
+    expect(screen.queryByText('نردبان آلومینیومی سه متری')).not.toBeInTheDocument();
   });
 
   it('says so plainly when a search inside the space finds nothing', async () => {
     mockFetchByUrl({
       [`/spaces/${SPACE_ID}`]: fullSpace(),
-      '/cards': { items: [card('66666666-6666-4666-8666-666666666666', 'نردبان', 'سه متری')], nextCursor: null },
+      '/cards': { items: [card('66666666-6666-4666-8666-666666666666', 'نردبان سه متری')], nextCursor: null },
       '/pins': EMPTY_PINS,
     });
     const user = userEvent.setup();
     render(<SpacePage idOrSlug={SPACE_ID} />);
-    await screen.findByText('نردبان');
+    await screen.findByText('نردبان سه متری');
 
     await user.type(screen.getByLabelText('جستجو در بستر'), 'چیزی که نیست');
     expect(await screen.findByText('کارتی با این عبارت پیدا نشد.')).toBeInTheDocument();
@@ -201,12 +201,18 @@ describe('SpacePage: a space looks like a conversation', () => {
     expect(await screen.findByText('این بستر یافت نشد.')).toBeInTheDocument();
   });
 
-  it('renders example cards from cardHints in the feed', async () => {
-    mountSpace({
-      definition: { ...fullSpace().definition, cardHints: [{ isExample: true, label: 'نمونه', title: 'کارت نمونه' }] },
+  it('shows the space\'s real cards and no sample-card row at all', async () => {
+    mockFetchByUrl({
+      [`/spaces/${SPACE_ID}`]: fullSpace(),
+      '/cards': { items: [card('66666666-6666-4666-8666-666666666666', 'اولین کارت این بستر')], nextCursor: null },
+      '/pins': EMPTY_PINS,
     });
-    expect(await screen.findByText('کارت نمونه')).toBeInTheDocument();
-    expect(screen.getByText('نمونه — محتوای واقعی نیست')).toBeInTheDocument();
+    render(<SpacePage idOrSlug={SPACE_ID} />);
+
+    expect(await screen.findByText('اولین کارت این بستر')).toBeInTheDocument();
+    // A space opens with three real cards of its own now, so the labelled
+    // sample row has nothing left to do (owner, 2026-09-27).
+    expect(screen.queryByText(/محتوای واقعی نیست/)).not.toBeInTheDocument();
   });
 });
 

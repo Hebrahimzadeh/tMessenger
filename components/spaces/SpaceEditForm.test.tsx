@@ -28,7 +28,6 @@ function space(overrides: Partial<SpaceResponse['definition']> = {}): SpaceRespo
       purpose: 'این بستر جایی است برای امانت‌دادن و امانت‌گرفتن وسایلی که کم استفاده می‌شوند.',
       audience: 'اهالی محله',
       participationMethods: ['ثبت کارت وسیله', 'گفت‌وگوی عمومی'],
-      cardHints: [{ isExample: true, label: 'نمونه', title: 'نردبان برای امانت' }],
       policyVersion: 1,
       roles: [
         { id: '33333333-3333-4333-8333-333333333331', key: 'primary-1', title: 'دارندهٔ وسیله', description: 'امانت می‌دهد.', isPrimary: true },
@@ -80,11 +79,12 @@ describe('SpaceEditForm', () => {
     const patch = calls[0]!;
     expect(patch.method).toBe('PATCH');
     expect(patch.url).toContain(`/spaces/${SPACE_ID}`);
-    const sent = patch.body as { title: string; roles: { key: string }[]; cardHints: unknown[] };
+    const sent = patch.body as { title: string; roles: { key: string }[] };
     expect(sent.title).toBe('امانت ابزار کوچه');
     expect(sent.roles.map((r) => r.key)).toEqual(['primary-1', 'primary-2', 'supporting-1']);
-    // Sample cards are not edited here, and are not dropped either.
-    expect(sent.cardHints).toHaveLength(1);
+    // A space's definition carries no card templates any more, so there is
+    // nothing card-shaped for an edit to send or drop.
+    expect(sent).not.toHaveProperty('cardHints');
   });
 
   it('splits the participation methods a person typed', async () => {

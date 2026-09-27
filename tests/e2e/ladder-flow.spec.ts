@@ -32,7 +32,10 @@ test('two users take a REUSABLE_RESOURCE card through the full ladder: create, p
 
   await page.waitForURL((url) => /^\/cards\//.test(url.pathname));
   const cardUrl = page.url();
-  await expect(page.getByRole('heading', { name: /نردبان/ })).toBeVisible();
+  // A card has no title, so what identifies it is its caption (owner,
+  // 2026-09-27) - scoped to a <p> so it cannot collide with the composer's
+  // own textarea, whose value transiently still holds the same text.
+  await expect(page.locator('p', { hasText: /نردبان سه‌متری قابل امانت/ }).first()).toBeVisible();
 
   // --- A second, independent user (user B) --------------------------
   const userBPage = await (await context.browser()!.newContext()).newPage();
@@ -143,10 +146,10 @@ test('with the suggestion unavailable, a card is still one click away', async ({
   await page.getByRole('button', { name: 'پیشنهاد برای این متن' }).click();
   await expect(page.getByText(/همان‌طور که نوشته‌اید ثبت کنید/)).toBeVisible();
 
-  // And the card goes out anyway, with a title from the first line.
+  // And the card goes out anyway, carrying exactly the caption they wrote.
   await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
   await page.waitForURL((url) => /^\/cards\//.test(url.pathname));
-  await expect(page.getByRole('heading', { name: 'یه چیزی برای کمک دارم' })).toBeVisible();
+  await expect(page.locator('p', { hasText: 'یه چیزی برای کمک دارم' }).first()).toBeVisible();
 });
 
 test('a generic sentence publishes without ever asking for a suggestion', async ({ page }) => {
@@ -162,5 +165,5 @@ test('a generic sentence publishes without ever asking for a suggestion', async 
   await page.getByRole('button', { name: 'ثبت کارت', exact: true }).click();
 
   await page.waitForURL((url) => /^\/cards\//.test(url.pathname));
-  await expect(page.getByRole('heading', { name: 'یه خبر برای محله دارم که گفتنش بد نیست.' })).toBeVisible();
+  await expect(page.locator('p', { hasText: 'یه خبر برای محله دارم که گفتنش بد نیست.' }).first()).toBeVisible();
 });

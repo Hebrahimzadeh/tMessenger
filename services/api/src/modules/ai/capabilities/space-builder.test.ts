@@ -26,7 +26,14 @@ function modelSpace(overrides: Partial<SpaceBuildOutput> = {}): SpaceBuildOutput
       { title: 'نیازمند وسیله', description: 'وسیله را امانت می‌گیرد.', isPrimary: true },
       { title: 'هماهنگ‌کننده', description: 'هماهنگی می‌کند.', isPrimary: false },
     ],
-    cardHints: [{ title: 'نردبان برای امانت', description: 'تحویل عصرها.' }],
+    openingCards: [
+      {
+        caption: 'این بستر را ساختم تا وسایلی که کم استفاده می‌شوند بی‌کار نمانند.',
+        comment: 'اگر وسیله‌ای دارید که حاضرید امانت بدهید، همین زیر بنویسید.',
+      },
+      { caption: 'چه وسیله‌ای دارید که ماه‌هاست به آن دست نزده‌اید؟', comment: 'نام وسیله را بنویسید.' },
+      { caption: 'به چه وسیله‌ای نیاز دارید؟', comment: 'مدتی که لازمش دارید را بنویسید.' },
+    ],
     reviewNote: '',
     ...overrides,
   };
@@ -72,6 +79,14 @@ describe('the document', () => {
     expect(example).toBeDefined();
     const parsed = spaceBuildOutputSchema.safeParse(JSON.parse(example!));
     expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+  });
+
+  it('tells the model to write three real opening cards and never label them', () => {
+    expect(SPACE_BUILDER_DOCUMENT).toContain('**دقیقاً سه کارت.**');
+    expect(SPACE_BUILDER_DOCUMENT).toContain('هیچ برچسب «نمونه» ننویس');
+    // The reason, kept in the document so it survives a rewrite of it.
+    expect(SPACE_BUILDER_DOCUMENT).toContain('هنجار بستر را از همان آغاز خراب می‌کند');
+    expect(SPACE_BUILDER_DOCUMENT).toContain('کارت **عنوان ندارد**');
   });
 
   it('has a stable reference that changes when the wording does', () => {
@@ -167,6 +182,17 @@ describe('an outage changes the writing, never the safety', () => {
     expect(result.space).not.toBeNull();
   });
 
+  it('rejects a model design with fewer than three opening cards and falls back to three real ones', async () => {
+    const short = modelSpace({ openingCards: [{ caption: 'تنها یک کارت', comment: 'یک پرسش' }] });
+    const result = await buildSpace(deps(withModel(short)), 'یه کار خوب برای محله', null);
+
+    // Every space opens with exactly three, so a design with fewer is not a
+    // design: the rules supply the whole space instead, and say so.
+    expect(result.decision).toBe('PUBLISH');
+    expect(result.creativityApplied).toBe(false);
+    expect(result.space?.openingCards).toHaveLength(3);
+  });
+
   it('rejects a model design with three primary roles and falls back', async () => {
     const tooMany = modelSpace({
       roles: [
@@ -196,6 +222,22 @@ describe('the rules decide, twice', () => {
   it('blocks when the model writes what the prompt only hinted at', async () => {
     const drifted = modelSpace({
       description: 'این بستر برای برگزاری مسابقه با شرط‌بندی نقدی میان اهالی است و جایزه به برنده می‌رسد.',
+    });
+    const result = await buildSpace(deps(withModel(drifted)), 'یه مسابقه برای محله', null);
+
+    expect(result.decision).toBe('BLOCK');
+    expect(result.space).toBeNull();
+  });
+
+  it('blocks when the drift is in an opening card rather than the description', async () => {
+    // The three opening cards become real cards the moment the space exists,
+    // so they are checked exactly like everything else a visitor would read.
+    const drifted = modelSpace({
+      openingCards: [
+        { caption: 'برای شرط‌بندی نقدی روی مسابقه‌ها همین زیر بنویسید.', comment: 'جایزه به برنده می‌رسد.' },
+        { caption: 'چه چیزی دارید؟', comment: 'بنویسید.' },
+        { caption: 'به چه چیزی نیاز دارید؟', comment: 'بنویسید.' },
+      ],
     });
     const result = await buildSpace(deps(withModel(drifted)), 'یه مسابقه برای محله', null);
 

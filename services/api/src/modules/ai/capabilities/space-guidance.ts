@@ -1,5 +1,4 @@
 import {
-  EXAMPLE_CARD_NOTICE,
   spaceCreationGuidanceSchema,
   type CreationDecision,
   type SpaceCreationGuidance,
@@ -179,12 +178,12 @@ function creativeFallback(proposal: SpaceProposal): Omit<
     suggestedRevisions: structuralRevisions(proposal),
     participationRoles: [...PROPOSED_PRIMARY_ROLES],
     valueChainNodes: ['شناسایی نیاز', 'هماهنگی', 'انجام کار', 'بازخورد'],
-    exampleCardTemplates: [
+    // A card the person could publish as their own, not a mock-up labelled
+    // as one: the space's first cards are real cards from the first moment.
+    openingCardDrafts: [
       {
-        title: 'نمونه: اعلام آمادگی',
-        body: 'من می‌توانم روزهای پنجشنبه کمک کنم. اگر کسی هماهنگی می‌کند خبر بدهد.',
-        isExample: true,
-        notice: EXAMPLE_CARD_NOTICE,
+        caption: 'این بستر را ساختم تا کاری که تنهایی از پیش نمی‌رود با همکاری چند نفر شکل بگیرد.',
+        comment: 'اگر همراه می‌شوید، همین زیر بنویسید چه سهمی می‌توانید برعهده بگیرید.',
       },
     ],
     suggestedToolKeys: ['coordination', 'scheduling'],

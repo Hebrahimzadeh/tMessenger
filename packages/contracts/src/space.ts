@@ -15,15 +15,6 @@ export type SpaceStatus = z.infer<typeof spaceStatusSchema>;
 export const spaceGateVerdictSchema = z.enum(['ALLOW', 'REVISE', 'HUMAN_REVIEW', 'BLOCK']);
 export type SpaceGateVerdict = z.infer<typeof spaceGateVerdictSchema>;
 
-/** A card-template hint on a space's definition - descriptive JSON only, never used to create a real card/identity/participation record (see space.service.ts). */
-export const spaceCardHintSchema = z.object({
-  isExample: z.literal(true),
-  label: z.literal('نمونه'),
-  title: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(1000).optional(),
-});
-export type SpaceCardHint = z.infer<typeof spaceCardHintSchema>;
-
 /** One participation-role slot in a space's definition body - `key` is a stable, space-scoped identifier (see schema.prisma's SpaceParticipationRole). */
 export const spaceRoleInputSchema = z.object({
   key: z
@@ -44,13 +35,12 @@ export const createSpaceBodySchema = z.object({
 });
 export type CreateSpaceBody = z.infer<typeof createSpaceBodySchema>;
 
-/** PATCH /v1/spaces/:id - the full definition body. Structurally lenient (e.g. only one role, or zero participation methods, is accepted here) - `publish` is what actually enforces the plan's minimums; see space.service.ts's publishSpace. */
+/** PATCH /v1/spaces/:id - the full definition body. A space's definition carries no card templates: its cards are real cards, written by real people from the first moment (see `spaceOpeningCardSchema`). Structurally lenient (e.g. only one role, or zero participation methods, is accepted here) - `publish` is what actually enforces the plan's minimums; see space.service.ts's publishSpace. */
 export const updateSpaceDefinitionBodySchema = z.object({
   title: z.string().trim().min(1).max(200),
   purpose: z.string().trim().max(2000),
   audience: z.string().trim().max(500).optional(),
   participationMethods: z.array(z.string().trim().min(1).max(100)).max(20),
-  cardHints: z.array(spaceCardHintSchema).max(10).optional(),
   roles: z.array(spaceRoleInputSchema).max(20),
   policyVersion: z.number().int().positive(),
 });
@@ -71,7 +61,6 @@ export const spaceDefinitionSchema = z.object({
   purpose: z.string(),
   audience: z.string().nullable(),
   participationMethods: z.array(z.string()),
-  cardHints: z.array(spaceCardHintSchema).nullable(),
   policyVersion: z.number().int(),
   roles: z.array(spaceRoleSchema),
 });

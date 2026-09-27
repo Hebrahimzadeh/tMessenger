@@ -1,92 +1,86 @@
 'use client';
 
 import Link from 'next/link';
-import type { CardListItem, SpaceCardHint } from '@taavon/contracts';
-import { Heart, ChatIcon, Paperclip, Truck } from '@/components/icons';
+import { useRouter } from 'next/navigation';
+import type { CardListItem } from '@taavon/contracts';
+import { ImageIcon, Paperclip } from '@/components/icons';
 import { toPersianDigits } from '@/lib/persian-digits';
+import { CardActionBar } from './CardActionBar';
 
-export type CardTemplateProps =
-  | { variant: 'real'; card: CardListItem }
-  | { variant: 'example'; hint: SpaceCardHint };
-
-/**
- * A card in a space's feed - a message in the conversation, in the shape
- * `tmessenger-v1.html`'s `renderCardTemplate` gives it: a rounded white
- * bubble with the author's initial, the body, and the three actions along a
- * divided footer.
- *
- * "نمونه را با badge دائمی و CTAهای reaction/reserve/chat غیرفعال render
- * کن" - an example card hint carries the same three icons a real card does,
- * but every one of them is inert (no navigation, no handler) and the
- * "نمونه — محتوای واقعی نیست" badge is permanent, never dismissible.
- * Interacting (reacting, reserving, commenting) always happens on the real
- * card's own detail page - the feed's icons are deep-links into it, not
- * inline actions duplicating that state.
- */
-function Footer({ inert, commentCount }: { inert: boolean; commentCount?: number }) {
-  const cell = 'flex flex-1 items-center justify-center gap-1.5 py-2.5';
-  return (
-    <div className={`flex items-center divide-x divide-x-reverse divide-gray-100 border-t border-gray-100 ${inert ? 'text-gray-300' : 'text-gray-400'}`}>
-      <span className={`${cell} ${inert ? '' : 'hover:text-rose-500'}`}>
-        <Heart size={17} strokeWidth={1.8} />
-      </span>
-      <span className={`${cell} ${inert ? '' : 'hover:text-emerald-600'}`}>
-        <Truck size={17} strokeWidth={1.8} />
-      </span>
-      <span className={`${cell} ${inert ? '' : 'hover:text-[#527DA3]'}`}>
-        <ChatIcon size={17} strokeWidth={1.8} />
-        {commentCount !== undefined && commentCount > 0 && (
-          <span className="text-[11px] font-bold text-gray-500">{toPersianDigits(String(commentCount))}</span>
-        )}
-      </span>
-    </div>
-  );
+export interface CardTemplateProps {
+  card: CardListItem;
+  /** Null for a visitor with no session - the four actions still render, and the two that write are disabled. */
+  currentUserId?: string | null;
 }
 
-export function CardTemplate(props: CardTemplateProps) {
-  if (props.variant === 'example') {
-    const { hint } = props;
-    return (
-      <div className="mb-3 w-full overflow-hidden rounded-2xl border border-gray-100 bg-white text-right shadow-sm">
-        <div className="p-3">
-          <div className="mb-2.5 flex items-center gap-2">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-[13px] font-bold text-gray-400">
-              ؟
-            </div>
-            <span className="text-[13px] font-bold leading-tight text-gray-800">{hint.title}</span>
-            <span className="mr-auto shrink-0 whitespace-nowrap rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-              {hint.label} — محتوای واقعی نیست
-            </span>
-          </div>
-          {hint.description && <p className="text-[13px] leading-relaxed text-gray-600">{hint.description}</p>}
-        </div>
-        <Footer inert />
-      </div>
-    );
-  }
+/**
+ * A card in a feed, in the shape the owner settled on (2026-09-27): an
+ * image, a caption, and four actions - پسند، گفت‌وگو، هم‌رسانی، نشان.
+ *
+ * It has no name and no title. Where a title used to sit there is now
+ * nothing, because a card is a thing somebody is showing and what they wrote
+ * under it, the way a message in a conversation is.
+ *
+ * Either half can be missing and it is still a whole card: an image with
+ * nothing written under it, or a caption with no image - "گاهی کاربر تصویر
+ * هم اضافه نمی‌کند".
+ *
+ * The image and caption navigate to the card's own page; the action bar's
+ * buttons sit outside that link, so liking something in the feed does not
+ * navigate away from it (and so a button is not nested inside an anchor,
+ * which no browser renders predictably).
+ */
+export function CardTemplate({ card, currentUserId = null }: CardTemplateProps) {
+  const router = useRouter();
+  const caption = card.body.trim();
+  // Attachments the caption does not already account for: the image is
+  // rendered, so it is not news that the card has one.
+  const otherAttachments = card.imageUrl ? card.attachmentCount - 1 : card.attachmentCount;
 
-  const { card } = props;
   return (
-    <Link
-      href={`/cards/${card.id}`}
-      className="mb-3 block w-full overflow-hidden rounded-2xl border border-gray-100 bg-white text-right shadow-sm transition hover:shadow-md active:scale-[0.99]"
-    >
-      <div className="p-3">
-        <div className="mb-2.5 flex items-center gap-2">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#527DA3] to-blue-400 text-[13px] font-bold text-white">
-            {card.title.trim().charAt(0)}
-          </div>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-bold leading-tight text-gray-800">{card.title}</span>
-          {card.attachmentCount > 0 && (
-            <span dir="ltr" className="flex shrink-0 items-center gap-1 text-[11px] text-gray-400">
+    <article className="mb-3 w-full overflow-hidden rounded-2xl border border-gray-100 bg-white text-right shadow-sm">
+      <Link href={`/cards/${card.id}`} className="block transition hover:bg-gray-50/60">
+        {card.imageUrl && (
+          // A signed, time-limited URL: next/image would need its host on an
+          // allowlist and would re-fetch it server-side - the same reason
+          // MediaPreview renders one directly.
+          //
+          // The alt text is empty when there is a caption, because the
+          // caption is right underneath and describing it twice is noise. A
+          // card with no caption gets a name instead, so the image is not
+          // simply invisible to a screen reader.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={card.imageUrl}
+            alt={caption ? '' : 'تصویر کارت'}
+            className="max-h-80 w-full bg-gray-50 object-cover"
+          />
+        )}
+        <div className="p-3">
+          {caption ? (
+            <p className="line-clamp-4 whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700">{caption}</p>
+          ) : (
+            !card.imageUrl && (
+              <p className="flex items-center gap-1.5 text-[12px] text-gray-400">
+                <ImageIcon size={14} />
+                این کارت فقط پیوست دارد.
+              </p>
+            )
+          )}
+          {otherAttachments > 0 && (
+            <span dir="ltr" className="mt-2 flex items-center gap-1 text-[11px] text-gray-400">
               <Paperclip size={13} />
-              {toPersianDigits(String(card.attachmentCount))}
+              {toPersianDigits(String(otherAttachments))}
             </span>
           )}
         </div>
-        <p className="line-clamp-3 text-[13px] leading-relaxed text-gray-700">{card.body}</p>
-      </div>
-      <Footer inert={false} />
-    </Link>
+      </Link>
+      <CardActionBar
+        cardId={card.id}
+        engagement={card.engagement}
+        currentUserId={currentUserId}
+        onCommentClick={() => router.push(`/cards/${card.id}`)}
+      />
+    </article>
   );
 }

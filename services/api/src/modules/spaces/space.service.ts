@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import type { SpaceGateVerdict, SpaceStatus } from '@taavon/database';
-import type { SpaceCardHint, SpaceCreationGuidance } from '@taavon/contracts';
+import type { CardKind, SpaceGateVerdict, SpaceStatus } from '@taavon/database';
+import type { SpaceCreationGuidance, SpaceOpeningCard } from '@taavon/contracts';
 import type { SpaceCreationGate } from './space-creation-gate';
 import type { SpaceBuildResult } from '../ai/capabilities/space-builder';
 import { generateUniqueSlug } from './slug';
+import { inferCardKind } from '../cards/card-kind-inference';
 
 export class SpaceNotFoundError extends Error {
   constructor() {
@@ -105,7 +106,6 @@ export interface SpaceVersionRecord {
   purpose: string;
   audience: string | null;
   participationMethods: string[];
-  cardHints: SpaceCardHint[] | null;
   policyVersion: number;
   gateVerdict: SpaceGateVerdict | null;
   gateReason: string | null;
@@ -135,6 +135,23 @@ export interface MySpaceRecord {
   createdAt: Date;
 }
 
+/**
+ * One of the three cards a new space opens with, as the repository needs it:
+ * the caption, the comment that goes under it, and the classification the
+ * card's semantic profile records.
+ *
+ * `kind`/`inferredKind` are decided here rather than by the builder for the
+ * same reason they are for any other card - the classifier is a rule table,
+ * not a model's opinion.
+ */
+export interface OpeningCardInput {
+  caption: string;
+  comment: string;
+  kind: CardKind;
+  inferredKind: CardKind;
+  confidence: number;
+}
+
 export interface SpaceRepository {
   slugExists(slug: string): Promise<boolean>;
   /** Creates the Space row plus its version-1 SpaceDefinitionVersion, and appends a `space.created` outbox event, all in one transaction. */
@@ -161,7 +178,6 @@ export interface SpaceRepository {
     purpose: string;
     audience?: string;
     participationMethods: string[];
-    cardHints?: SpaceCardHint[];
     roles: SpaceRoleInputRecord[];
     policyVersion: number;
     createdBy: string;
@@ -169,9 +185,10 @@ export interface SpaceRepository {
   /** Persists the verdict on that exact version, moves the space's status, and writes one audit event naming the baseline that decided it - all in one transaction. */
   /**
    * Creates a whole space from a built definition - the Space row, version 1
-   * with its verdict, its roles, its outbox events and one audit event - in a
-   * single transaction. There is no half-built state: either the person has a
-   * space or they do not.
+   * with its verdict, its roles, its three opening cards with a comment under
+   * each, its outbox events and one audit event - in a single transaction.
+   * There is no half-built state: either the person has a space that is
+   * already a conversation, or they do not have a space.
    */
   createBuiltSpace(input: {
     slug: string;
@@ -180,7 +197,7 @@ export interface SpaceRepository {
     purpose: string;
     audience?: string;
     participationMethods: string[];
-    cardHints: SpaceCardHint[];
+    openingCards: OpeningCardInput[];
     roles: SpaceRoleInputRecord[];
     policyVersion: number;
     status: 'PUBLISHED' | 'HUMAN_REVIEW';
@@ -203,7 +220,6 @@ export interface SpaceRepository {
     purpose: string;
     audience?: string;
     participationMethods: string[];
-    cardHints?: SpaceCardHint[];
     roles: SpaceRoleInputRecord[];
     policyVersion: number;
     createdBy: string;
@@ -301,7 +317,6 @@ export async function updateSpaceDefinition(
     purpose: string;
     audience?: string;
     participationMethods: string[];
-    cardHints?: SpaceCardHint[];
     roles: SpaceRoleInputRecord[];
     policyVersion: number;
   }
@@ -442,12 +457,7 @@ export async function buildSpaceFromPrompt(
     purpose: built.description,
     ...(built.audience ? { audience: built.audience } : {}),
     participationMethods: built.participationMethods,
-    cardHints: built.cardHints.map((hint) => ({
-      isExample: true as const,
-      label: 'نمونه' as const,
-      title: hint.title,
-      ...(hint.description ? { description: hint.description } : {}),
-    })),
+    openingCards: built.openingCards.map(toOpeningCardInput),
     roles,
     policyVersion: 1,
     status: publish ? 'PUBLISHED' : 'HUMAN_REVIEW',
@@ -469,6 +479,30 @@ export async function buildSpaceFromPrompt(
   };
 }
 
+/**
+ * A card the space opens with, classified the same way any other card is.
+ *
+ * The creator is its author, exactly as they are the author of the space's
+ * own description: the platform drafted the words, the person owns them, and
+ * they can edit or delete any of the three. What it is deliberately *not* is
+ * a labelled sample - "کارت آغازین با برچسب «نمونه»" is what this replaces,
+ * because a card announcing itself as unreal teaches everyone reading it that
+ * this is a place for unreal cards.
+ */
+function toOpeningCardInput(card: SpaceOpeningCard): OpeningCardInput {
+  const { inferredKind, confidence } = inferCardKind(card.caption);
+  return {
+    caption: card.caption,
+    comment: card.comment,
+    // Nobody picked a kind, so the card carries the platform's default and
+    // the rule-based guess alongside it - the same pair a card created
+    // through the composer without choosing a kind ends up with.
+    kind: 'AWARENESS',
+    inferredKind,
+    confidence,
+  };
+}
+
 const MIN_PUBLISHED_PURPOSE_LENGTH = 20;
 
 const EDIT_REFUSAL_REASONS = {
@@ -478,10 +512,6 @@ const EDIT_REFUSAL_REASONS = {
 
 function rolesText(roles: { title: string; description?: string | null }[]): string {
   return roles.map((role) => `${role.title}\n${role.description ?? ''}`).join('\n');
-}
-
-function hintsText(hints: SpaceCardHint[] | null | undefined): string {
-  return (hints ?? []).map((hint) => `${hint.title}\n${hint.description ?? ''}`).join('\n');
 }
 
 /**
@@ -507,7 +537,6 @@ export async function editSpace(
     purpose: string;
     audience?: string;
     participationMethods: string[];
-    cardHints?: SpaceCardHint[];
     roles: SpaceRoleInputRecord[];
     policyVersion: number;
   }
@@ -539,14 +568,13 @@ export async function editSpace(
     changed.push(...input.participationMethods);
   }
   if (rolesText(input.roles) !== rolesText(referencedRoles(space))) changed.push(rolesText(input.roles));
-  if (hintsText(input.cardHints) !== hintsText(current.cardHints)) changed.push(hintsText(input.cardHints));
 
   const verdict = await gate.check({
     title: input.title,
     purpose: input.purpose,
     participationMethods: input.participationMethods,
     primaryRoleCount: primaryCount,
-    publicText: [input.audience ?? '', rolesText(input.roles), hintsText(input.cardHints)].join('\n'),
+    publicText: [input.audience ?? '', rolesText(input.roles)].join('\n'),
     ambiguityText: changed.join('\n'),
   });
 
@@ -609,7 +637,6 @@ export interface SpaceView {
     purpose: string;
     audience: string | null;
     participationMethods: string[];
-    cardHints: SpaceCardHint[] | null;
     policyVersion: number;
     roles: SpaceRoleRecord[];
   };
@@ -647,7 +674,6 @@ function toView(space: SpaceRecord, canManage: boolean, follow: { followerCount:
       purpose: space.latestVersion.purpose,
       audience: space.latestVersion.audience,
       participationMethods: space.latestVersion.participationMethods,
-      cardHints: space.latestVersion.cardHints,
       policyVersion: space.latestVersion.policyVersion,
       roles: referencedRoles(space),
     },

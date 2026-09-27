@@ -15,7 +15,7 @@ const USER = '11111111-1111-4111-8111-111111111111';
 const DIRECT_CONVO = '22222222-2222-4222-8222-222222222222';
 const ASSISTANT_CONVO = '33333333-3333-4333-8333-333333333333';
 
-const GOOD_CARD = JSON.stringify({ kind: 'CARD_DRAFT', title: 'نردبان محله', body: 'نردبان سه‌متری برای امانت.' });
+const GOOD_CARD = JSON.stringify({ kind: 'CARD_DRAFT', body: 'نردبان سه‌متری برای امانت.' });
 
 function cardInput(over: Partial<AiRequestInput> = {}): AiRequestInput {
   return {
@@ -80,7 +80,7 @@ describe('the happy path', () => {
     const result = await ai.generate(cardInput(), USER);
 
     expect(result.outcome).toBe('SUGGESTION');
-    expect(result.output).toEqual({ kind: 'CARD_DRAFT', title: 'نردبان محله', body: 'نردبان سه‌متری برای امانت.' });
+    expect(result.output).toEqual({ kind: 'CARD_DRAFT', body: 'نردبان سه‌متری برای امانت.' });
     expect(result.errorCode).toBeNull();
     expect(results).toHaveLength(1);
     expect(usage).toHaveLength(1);

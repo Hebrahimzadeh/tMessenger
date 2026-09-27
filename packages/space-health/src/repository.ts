@@ -36,10 +36,11 @@ export function createPrismaSpaceHealthRepository(prisma: PrismaClient): SpaceHe
         prisma.spaceParticipationRole.count({ where: { spaceId } }),
         prisma.spaceParticipationRole.count({ where: { spaceId, memberships: { some: {} } } }),
         prisma.spaceDefinitionVersion.findFirst({ where: { spaceId }, orderBy: { versionNumber: 'desc' }, select: { createdAt: true } }),
-        // "کارت‌های نمونه ... هیچ counter را افزایش نمی‌دهند" - only real
-        // ACTIVE cards count; cardHints on the definition version is opaque
-        // descriptive JSON and is never queried here. Task 14 added the Card
-        // model, so this signal (stubbed at 0 in Task 13) is now real.
+        // Every ACTIVE card counts, including the three a space opens with:
+        // those are real cards its creator published (owner, 2026-09-27 -
+        // docs/decisions/2026-09-27-cards-are-caption-first.md), not the
+        // labelled samples §6.8 used to keep out of every counter. There is
+        // no longer any other kind of card to exclude.
         prisma.card.count({ where: { spaceId, status: 'ACTIVE' } }),
         prisma.card.findFirst({ where: { spaceId, status: 'ACTIVE' }, orderBy: { publishedAt: 'desc' }, select: { publishedAt: true } }),
       ]);

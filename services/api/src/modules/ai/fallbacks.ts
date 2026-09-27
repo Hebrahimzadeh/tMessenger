@@ -31,9 +31,8 @@ export function fallbackFor(capability: AiCapability, input: string): AiOutput {
     case 'CARD_DRAFT':
       return {
         kind: 'CARD_DRAFT',
-        // The person's own words, kept rather than replaced. A draft they
+        // The person's own words, kept rather than replaced. A caption they
         // wrote is a better starting point than an invented one.
-        title: firstLine(input).slice(0, 120) || 'کارت تازه',
         body: input.trim(),
       };
 
@@ -62,6 +61,3 @@ export function fallbackFor(capability: AiCapability, input: string): AiOutput {
   }
 }
 
-function firstLine(text: string): string {
-  return text.trim().split('\n')[0]?.trim() ?? '';
-}

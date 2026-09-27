@@ -47,8 +47,9 @@ describe('DuplicateCardAction', () => {
           kind: 'AWARENESS',
           status: 'ACTIVE',
           publishedAt: '2026-09-10T00:00:00.000Z',
-          revision: { revisionNumber: 1, title: 'متن قدیمی', body: 'متن قدیمی' },
+          revision: { revisionNumber: 1, body: 'متن قدیمی' },
           inferredKind: 'AWARENESS',
+          engagement: { likeCount: 0, commentCount: 0, likedByMe: false, bookmarkedByMe: false },
           attachments: [],
         });
       }

@@ -34,7 +34,7 @@ function fakeReactionRepo(opts: { cardStatus?: CardStatus; spaceStatus?: SpaceSt
       return 'added';
     },
     async summary(cardId, userId) {
-      const counts = { SUPPORT: 0, USEFUL: 0, INTERESTED: 0, CELEBRATE: 0 };
+      const counts = { LIKE: 0, SUPPORT: 0, USEFUL: 0, INTERESTED: 0, CELEBRATE: 0 };
       const mine: CardReactionType[] = [];
       for (const key of reactions) {
         const [kCard, kUser, kType] = key.split(':') as [string, string, CardReactionType];
@@ -68,7 +68,7 @@ describe('toggleReaction', () => {
     const limiter = createFakeRateLimiter(100, 60);
     await toggleReaction(repo, limiter, CARD, USER_1, 'SUPPORT');
     const after = await toggleReaction(repo, limiter, CARD, USER_2, 'USEFUL');
-    expect(after.summary.counts).toEqual({ SUPPORT: 1, USEFUL: 1, INTERESTED: 0, CELEBRATE: 0 });
+    expect(after.summary.counts).toEqual({ LIKE: 0, SUPPORT: 1, USEFUL: 1, INTERESTED: 0, CELEBRATE: 0 });
     expect(after.summary.mine).toEqual(['USEFUL']);
   });
 

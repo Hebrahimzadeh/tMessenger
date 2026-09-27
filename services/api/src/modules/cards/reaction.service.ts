@@ -9,7 +9,7 @@ export class CardNotFoundForReactionError extends Error {
   }
 }
 
-/** The card's space is not PUBLISHED, or the card is not ACTIVE. (An "example" card is only descriptive JSON on a space definition - it has no id to react to at all.) */
+/** The card's space is not PUBLISHED, or the card is not ACTIVE. */
 export class ReactionsNotAcceptedError extends Error {
   constructor() {
     super('This card does not accept reactions.');
@@ -27,6 +27,7 @@ export class ReactionRateLimitedError extends Error {
 }
 
 export interface ReactionCounts {
+  LIKE: number;
   SUPPORT: number;
   USEFUL: number;
   INTERESTED: number;

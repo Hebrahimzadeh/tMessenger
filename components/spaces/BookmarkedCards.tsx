@@ -1,33 +1,25 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import type { CardListItem } from '@taavon/contracts';
 import { cardListResponseSchema } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
 import { useCurrentUserId } from '@/hooks/useCurrentUserId';
 import { CardTemplate } from './CardTemplate';
 
-export interface SpaceFeedProps {
-  spaceId: string;
-  /** What the space's own search box holds. Filters what is already loaded, the way a chat's in-conversation search does. */
-  query?: string;
-}
-
 /**
- * The space's feed: every card in it, and nothing else.
+ * "نشان‌شده‌ها" - the cards this person kept, newest saved first.
  *
- * There is no second kind of row any more. The labelled sample cards that
- * used to sit underneath the real ones are gone (owner, 2026-09-27) - a space
- * opens with three real cards its creator published, so there is never a
- * moment where a badge saying "not real content" is the only thing in the
- * feed, and never a row somebody can react to that turns out not to be a
- * card.
+ * Their own list and nobody else's: the API needs a session even to read it,
+ * and a card whose space stopped being public simply stops appearing without
+ * the bookmark being deleted behind their back.
  */
-export function SpaceFeed({ spaceId, query = '' }: SpaceFeedProps) {
+export function BookmarkedCards() {
   const [cards, setCards] = useState<CardListItem[] | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const currentUser = useCurrentUserId();
   const currentUserId = currentUser.status === 'ready' ? currentUser.userId : null;
 
@@ -35,27 +27,31 @@ export function SpaceFeed({ spaceId, query = '' }: SpaceFeedProps) {
     let cancelled = false;
     (async () => {
       try {
-        const page = cardListResponseSchema.parse(await apiFetch(`/spaces/${spaceId}/cards`));
+        const page = cardListResponseSchema.parse(await apiFetch('/me/bookmarks'));
         if (!cancelled) {
           setCards(page.items);
           setNextCursor(page.nextCursor);
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'بارگذاری فید ممکن نشد.');
+        if (!cancelled) {
+          setError(
+            err instanceof ApiError && err.status === 401
+              ? 'برای دیدن کارت‌های نشان‌شده وارد شوید.'
+              : 'بارگذاری کارت‌های نشان‌شده ممکن نشد.'
+          );
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [spaceId]);
+  }, []);
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const page = cardListResponseSchema.parse(
-        await apiFetch(`/spaces/${spaceId}/cards?cursor=${encodeURIComponent(nextCursor)}`)
-      );
+      const page = cardListResponseSchema.parse(await apiFetch(`/me/bookmarks?cursor=${encodeURIComponent(nextCursor)}`));
       setCards((prev) => [...(prev ?? []), ...page.items]);
       setNextCursor(page.nextCursor);
     } catch (err) {
@@ -65,27 +61,25 @@ export function SpaceFeed({ spaceId, query = '' }: SpaceFeedProps) {
     }
   }
 
-  const needle = query.trim();
-  const visibleCards = (cards ?? []).filter((card) => needle.length === 0 || card.body.includes(needle));
-  const hasNothing = cards !== null && visibleCards.length === 0;
-
   return (
-    <div dir="rtl" className="text-right">
+    <div dir="rtl" className="mx-auto max-w-2xl p-4 text-right">
+      <h1 className="mb-3 text-base font-semibold text-gray-900">نشان‌شده‌ها</h1>
+
       {error && (
         <p role="alert" className="mb-2 text-sm text-red-700">
           {error}
         </p>
       )}
 
-      {hasNothing && (
+      {cards !== null && cards.length === 0 && !error && (
         <div className="rounded-2xl border border-dashed border-gray-300 bg-white/60 p-8 text-center text-sm text-gray-500">
-          {needle.length > 0 ? 'کارتی با این عبارت پیدا نشد.' : 'هنوز کارتی در این بستر ثبت نشده است. اولین کارت را شما بنویسید.'}
+          هنوز کارتی را نشان نکرده‌اید. هر کارت را می‌توانید از نوار پایینش نشان کنید تا بعداً پیدایش کنید.
         </div>
       )}
 
-      {visibleCards.length > 0 && (
+      {cards !== null && cards.length > 0 && (
         <ul>
-          {visibleCards.map((card) => (
+          {cards.map((card) => (
             <li key={card.id}>
               <CardTemplate card={card} currentUserId={currentUserId} />
             </li>
@@ -93,7 +87,7 @@ export function SpaceFeed({ spaceId, query = '' }: SpaceFeedProps) {
         </ul>
       )}
 
-      {nextCursor && needle.length === 0 && (
+      {nextCursor && (
         <button
           type="button"
           onClick={loadMore}
@@ -103,6 +97,10 @@ export function SpaceFeed({ spaceId, query = '' }: SpaceFeedProps) {
           {loadingMore ? 'در حال بارگذاری...' : 'نمایش کارت‌های بیشتر'}
         </button>
       )}
+
+      <Link href="/" className="text-sm text-blue-700 underline">
+        بازگشت
+      </Link>
     </div>
   );
 }

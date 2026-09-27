@@ -105,7 +105,6 @@ function fakeSpaceRepo() {
           purpose: '',
           audience: null,
           participationMethods: [],
-          cardHints: null,
           policyVersion,
           gateVerdict: null,
           gateReason: null,
@@ -182,7 +181,6 @@ function fakeSpaceRepo() {
       versions.push({
         ...rest,
         audience: rest.audience ?? null,
-        cardHints: rest.cardHints ?? null,
         versionNumber,
         gateVerdict: null,
         gateReason: null,
@@ -222,7 +220,6 @@ function fakeSpaceRepo() {
           purpose: input.purpose,
           audience: input.audience ?? null,
           participationMethods: input.participationMethods,
-          cardHints: input.cardHints,
           policyVersion: input.policyVersion,
           gateVerdict: input.verdict,
           gateReason: input.reason,
@@ -252,7 +249,6 @@ function fakeSpaceRepo() {
       versions.push({
         ...rest,
         audience: rest.audience ?? null,
-        cardHints: rest.cardHints ?? null,
         versionNumber,
         gateVerdict: 'ALLOW',
         gateReason,
@@ -877,15 +873,31 @@ describe('buildSpaceFromPrompt', () => {
     for (const role of space.definition.roles) expect(role.key).toMatch(/^(primary|supporting)-\d$/);
   });
 
-  it('marks every sample card as an example', async () => {
+  it('opens the space with three real cards, each carrying a comment', async () => {
+    const { repo, builtAudit } = fakeSpaceRepo();
+    await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'امانت ابزار محله');
+
+    const opening = builtAudit[0]!.openingCards;
+    expect(opening).toHaveLength(3);
+    for (const card of opening) {
+      expect(card.caption.length).toBeGreaterThan(0);
+      expect(card.comment.length).toBeGreaterThan(0);
+      // Classified like any other card, by rules rather than by a model.
+      expect(card.kind).toBe('AWARENESS');
+      expect(card.inferredKind).toBeDefined();
+      // "ننویسیم محتوای نمونه غیر واقعی" - nothing in an opening card says it
+      // is an example, because it is not one.
+      expect(`${card.caption} ${card.comment}`).not.toContain('نمونه');
+      expect(`${card.caption} ${card.comment}`).not.toContain('محتوای واقعی نیست');
+    }
+  });
+
+  it('carries no card templates on the space\'s definition any more', async () => {
     const { repo } = fakeSpaceRepo();
     const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'امانت ابزار محله');
     const space = await getSpace(repo, result.space!.id, null);
 
-    expect(space.definition.cardHints?.length).toBeGreaterThan(0);
-    for (const hint of space.definition.cardHints ?? []) {
-      expect(hint).toMatchObject({ isExample: true, label: 'نمونه' });
-    }
+    expect(space.definition).not.toHaveProperty('cardHints');
   });
 
   it('records the document, the baseline and whether a model wrote it', async () => {
@@ -942,7 +954,11 @@ describe('buildSpaceFromPrompt', () => {
         { title: 'دارندهٔ وسیله', description: 'امانت می‌دهد.', isPrimary: true },
         { title: 'نیازمند وسیله', description: 'امانت می‌گیرد.', isPrimary: true },
       ],
-      cardHints: [],
+      openingCards: [
+        { caption: 'این بستر را ساختم تا وسایل کم‌استفاده بی‌کار نمانند.', comment: 'چه وسیله‌ای دارید؟' },
+        { caption: 'چه وسیله‌ای دارید که ماه‌هاست به آن دست نزده‌اید؟', comment: 'نامش را بنویسید.' },
+        { caption: 'به چه وسیله‌ای نیاز دارید؟', comment: 'مدتش را بنویسید.' },
+      ],
       reviewNote: '',
     };
     const provider = new FakeAiProvider([{ kind: 'ok', text: JSON.stringify(designed) }]);
@@ -973,7 +989,6 @@ describe('editSpace after publication', () => {
       purpose: space.definition.purpose,
       audience: space.definition.audience ?? undefined,
       participationMethods: space.definition.participationMethods,
-      cardHints: space.definition.cardHints ?? undefined,
       roles: space.definition.roles.map((r) => ({
         key: r.key,
         title: r.title,

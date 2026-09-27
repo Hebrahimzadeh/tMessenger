@@ -4,7 +4,6 @@ import { useState, type FormEvent } from 'react';
 import type { CardInference, CardKindContract, CardResponse } from '@taavon/contracts';
 import { cardInferenceSchema, cardResponseSchema } from '@taavon/contracts';
 import { apiFetch, ApiError } from '@/lib/api/client';
-import { deriveTitlePreview } from '@/lib/derive-title';
 import { CardAttachmentPicker } from './CardAttachmentPicker';
 import { CardInferencePreview, KIND_LABELS, type AcceptedInference } from './CardInferencePreview';
 
@@ -18,9 +17,10 @@ export interface CardComposerProps {
 
 /**
  * "composer را تک‌ورودی و preview-first بساز؛ انتخاب kind اجباری نباشد" -
- * one primary text field (the title is an optional, collapsed extra), no
- * kind selector in the way, and a live preview of the card as it will
- * actually look. "متن کلی را نیز قابل ارسال نگه دار" - completely generic,
+ * one text field, no kind selector in the way, and a live preview of the card
+ * as it will actually look. There is no title field, optional or otherwise:
+ * a card does not have one (owner, 2026-09-27), so the caption is the only
+ * thing to write. "متن کلی را نیز قابل ارسال نگه دار" - completely generic,
  * unstructured text is always a valid submission.
  *
  * Task 25 adds a suggestion, and adds it as an offer rather than a step.
@@ -31,7 +31,6 @@ export interface CardComposerProps {
  * no path through here that waits on it.
  */
 export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: CardComposerProps) {
-  const [title, setTitle] = useState('');
   const [body, setBody] = useState(initialBody ?? '');
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -45,7 +44,6 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
   const trimmedBody = body.trim();
   const hasContent = trimmedBody.length > 0 || attachmentIds.length > 0;
   const canSubmit = hasContent && !submitting;
-  const previewTitle = deriveTitlePreview(title, body);
 
   async function handleSuggest() {
     if (trimmedBody.length === 0 || inferring) return;
@@ -56,7 +54,7 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
         cardInferenceSchema.parse(
           await apiFetch(`/spaces/${spaceId}/cards/infer`, {
             method: 'POST',
-            body: JSON.stringify({ body: trimmedBody, ...(title.trim() ? { title: title.trim() } : {}) }),
+            body: JSON.stringify({ body: trimmedBody }),
           })
         )
       );
@@ -70,7 +68,6 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
   }
 
   function applyInference(accepted: AcceptedInference) {
-    if (accepted.title !== undefined) setTitle(accepted.title);
     if (accepted.body !== undefined) setBody(accepted.body);
     if (accepted.kind !== undefined) setKind(accepted.kind);
     setConfirmedInference(accepted.confirmedInference);
@@ -89,7 +86,6 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
           method: 'POST',
           body: JSON.stringify({
             body: trimmedBody,
-            ...(title.trim() ? { title: title.trim() } : {}),
             ...(kind ? { kind } : {}),
             ...(confirmedInference ? { confirmedInference } : {}),
             attachmentIds,
@@ -123,18 +119,6 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
         />
       </div>
 
-      <details>
-        <summary className="cursor-pointer text-[12px] font-medium text-[#527DA3]">افزودن عنوان (اختیاری)</summary>
-        <input
-          type="text"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          disabled={submitting}
-          placeholder="عنوان کوتاه..."
-          className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-[14px] transition focus:border-[#527DA3] focus:outline-none"
-        />
-      </details>
-
       <CardAttachmentPicker onChange={setAttachmentIds} disabled={submitting} />
 
       {inference ? (
@@ -156,8 +140,11 @@ export function CardComposer({ spaceId, initialBody, onCreated, onCancel }: Card
         <div className="rounded-2xl border border-gray-100 bg-white p-3 shadow-sm">
           <p className="mb-1 text-[11px] font-medium text-gray-400">پیش‌نمایش کارت</p>
           {kind && <p className="mb-1 text-[11px] text-[#527DA3]">{KIND_LABELS[kind]}</p>}
-          <p className="text-[13px] font-bold text-gray-800">{previewTitle}</p>
-          {trimmedBody && <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700">{body}</p>}
+          {trimmedBody ? (
+            <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700">{body}</p>
+          ) : (
+            <p className="text-[12px] text-gray-400">این کارت فقط پیوست دارد.</p>
+          )}
         </div>
       )}
 

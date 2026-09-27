@@ -14,7 +14,6 @@ function ladderInference(overrides: Record<string, unknown> = {}) {
   return {
     kind: 'REUSABLE_RESOURCE',
     confidence: 0.7,
-    suggestedTitle: 'نردبان برای امانت',
     suggestedBody: 'یک نردبان دارم و می‌توانم قرض بدهم.',
     assumptions: ['پس از بسته‌شدن، این کارت دوباره فعال نمی‌شود؛ دفعهٔ بعد کارت تازه‌ای بسازید.'],
     creativityApplied: true,
@@ -38,9 +37,10 @@ function createdCard(overrides: Record<string, unknown> = {}) {
     kind: 'AWARENESS',
     status: 'ACTIVE',
     publishedAt: '2026-09-10T00:00:00.000Z',
-    revision: { revisionNumber: 1, title: 'یک کارت', body: 'یک کارت' },
+    revision: { revisionNumber: 1, body: 'یک کارت' },
     inferredKind: 'AWARENESS',
     attachments: [],
+    engagement: { likeCount: 0, commentCount: 0, likedByMe: false, bookmarkedByMe: false },
     ...overrides,
   };
 }
@@ -95,9 +95,10 @@ describe('CardComposer ("تک‌ورودی و preview-first"، انتخاب kind
         kind: 'AWARENESS',
         status: 'ACTIVE',
         publishedAt: '2026-09-10T00:00:00.000Z',
-        revision: { revisionNumber: 1, title: 'یک کارت متنی', body: 'یک کارت متنی' },
+        revision: { revisionNumber: 1, body: 'یک کارت متنی' },
         inferredKind: 'AWARENESS',
         attachments: [],
+        engagement: { likeCount: 0, commentCount: 0, likedByMe: false, bookmarkedByMe: false },
       })
     ) as unknown as typeof fetch;
 

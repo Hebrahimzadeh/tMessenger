@@ -33,7 +33,7 @@ describe.skipIf(!databaseAvailable)('AwarenessRepository: real Postgres', () => 
     spaceId = space.id;
     const card = await getPrisma().card.create({ data: { spaceId, authorId, kind: 'AWARENESS', status: 'ACTIVE' } });
     cardId = card.id;
-    await getPrisma().cardRevision.create({ data: { cardId, revisionNumber: 1, title: 'x', body: 'x', editorId: authorId } });
+    await getPrisma().cardRevision.create({ data: { cardId, revisionNumber: 1, body: 'x', editorId: authorId } });
   });
 
   afterEach(async () => {
