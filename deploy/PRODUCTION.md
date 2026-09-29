@@ -2,12 +2,34 @@
 
 Public URL: `https://tmessenger.taavonafarin.ir`
 SSH: `root@185.252.29.27`, port `2727`.
-Release: `/opt/tmessenger/releases/20260929-eb0a51f` (Tasks 1-25, the
-Telegram front end for spaces, caption-first cards, plus the deployment
-fixes below).
+Release: `/opt/tmessenger/releases/20260929-d834362` (Tasks 1-25, the
+Telegram front end for spaces, caption-first cards, the prompt archive,
+plus the deployment fixes below).
 Runtime settings: `/opt/tmessenger/shared/.env` (mode `0600`, root only).
-Previous releases kept for rollback: `20260919-6e13987`,
-`20260918-e6dcc01`, and `20260911-5797505` (UI preview) before them.
+Previous releases kept for rollback: `20260929-eb0a51f`,
+`20260919-6e13987`, `20260918-e6dcc01`, and `20260911-5797505` (UI
+preview) before them.
+
+## Prompt archive
+
+Since 2026-09-29 the prompts behind every AI call are kept for review
+(`docs/decisions/2026-09-29-prompt-archive-for-review.md`). Two things
+this deployment has to keep true:
+
+- **The purge must run.** A fourth worker queue, `prompt-archive-purge`,
+  clears prompt text older than 90 days at 04:00 daily. It logs every
+  run, including the ones that clear nothing - that line is the evidence
+  the retention promise is still being kept. If the worker is down, the
+  archive quietly stops expiring:
+
+  ```sh
+  $DC logs worker | grep prompt-archive-purge
+  ```
+
+- **Reading it is SUPERADMIN + MFA.** `/admin/space-builds`, via
+  `GET /v1/admin/space-builds`. No superadmin is bootstrapped yet (see
+  "Admin access" below), so nobody can read the archive through the
+  interface until one is.
 
 > **Schema warning for a rollback past 2026-09-29.** Migration
 > `20260927090100_cards_are_caption_first` *drops* `card_revisions.title`
