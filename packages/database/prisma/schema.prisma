@@ -16,6 +16,16 @@ datasource db {
 // domain table arrives in its own task's own migration - see
 // docs/new-plan.md section 12 (data model contract) and its migration rule
 // "migration اعمال‌شده را rewrite نکن؛ migration جدید بساز".
+//
+// SUSPENDED while the project is in development (owner, 2026-09-29 - see
+// docs/decisions/2026-09-29-development-mode-migrations.md). Until this
+// runs for real users: earlier migrations may be deleted and replaced, no
+// backfill is expected, and losing the current content when the schema is
+// rebuilt is accepted - spaces are simply created again against the new
+// one. Write the schema you want rather than a chain of corrections.
+//
+// Still true meanwhile: take a dump before rebuilding production's schema,
+// and say what is being discarded before discarding it.
 
 /// Generic admin-adjustable key/value store for runtime configuration that
 /// doesn't warrant its own table (feature flags, thresholds, etc.).
