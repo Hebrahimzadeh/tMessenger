@@ -2,11 +2,19 @@
 
 Public URL: `https://tmessenger.taavonafarin.ir`
 SSH: `root@185.252.29.27`, port `2727`.
-Release: `/opt/tmessenger/releases/20260919-6e13987` (Tasks 1-25, plus the
-deployment fixes below).
+Release: `/opt/tmessenger/releases/20260929-eb0a51f` (Tasks 1-25, the
+Telegram front end for spaces, caption-first cards, plus the deployment
+fixes below).
 Runtime settings: `/opt/tmessenger/shared/.env` (mode `0600`, root only).
-Previous release kept for rollback: `20260918-e6dcc01`, and
-`20260911-5797505` (UI preview) before it.
+Previous releases kept for rollback: `20260919-6e13987`,
+`20260918-e6dcc01`, and `20260911-5797505` (UI preview) before them.
+
+> **Schema warning for a rollback past 2026-09-29.** Migration
+> `20260927090100_cards_are_caption_first` *drops* `card_revisions.title`
+> and `space_definition_versions.cardHints`. Rolling application code back
+> to `20260919-6e13987` or earlier will not bring those columns back, and
+> that code expects them. The dump taken immediately before the migration
+> is `/opt/tmessenger/shared/backups/taavon-20260929-133740-before-caption-first.sql.gz`.
 
 ## Current behaviour
 
