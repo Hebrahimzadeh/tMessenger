@@ -114,6 +114,17 @@ export function AdminDashboard() {
     <div dir="rtl" className="p-6 text-right space-y-8">
       <h1 className="text-xl font-bold text-gray-900">پیشخوان مدیریت</h1>
 
+      {/* The sub-pages had no way in at all: /admin/metrics was reachable
+          only by typing it. A review surface nobody can find is not one. */}
+      <nav className="flex flex-wrap gap-2">
+        <Link href="/admin/space-builds" className="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+          بررسی ساخت بسترها
+        </Link>
+        <Link href="/admin/metrics" className="rounded-xl border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+          سنجه‌های آگاهی
+        </Link>
+      </nav>
+
       <section>
         <h2 className="text-lg font-semibold text-gray-800 mb-3">مدارک هویت رسمی در انتظار بررسی</h2>
         {gate.claims.length === 0 ? (

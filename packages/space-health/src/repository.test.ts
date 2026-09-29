@@ -46,7 +46,7 @@ describe.skipIf(!databaseAvailable)('SpaceHealthRepository: real Postgres', () =
     createdSpaceIds.length = 0;
   });
 
-  async function createSpace(options: { published: boolean; cardHints?: unknown }) {
+  async function createSpace(options: { published: boolean }) {
     slugCounter += 1;
     const space = await getPrisma().space.create({
       data: {
@@ -72,7 +72,6 @@ describe.skipIf(!databaseAvailable)('SpaceHealthRepository: real Postgres', () =
         title: 'باغ محله سلامت',
         purpose: 'purpose text',
         participationMethods: ['حضوری'],
-        cardHints: (options.cardHints as never) ?? undefined,
         primaryRoleIds: [roleA.id, roleB.id],
         supplementaryRoleIds: [],
         policyVersion: 1,
@@ -83,19 +82,18 @@ describe.skipIf(!databaseAvailable)('SpaceHealthRepository: real Postgres', () =
     return { spaceId: space.id, roleAId: roleA.id, roleBId: roleB.id };
   }
 
-  it('gatherSignals reflects real role memberships, not example card content', async () => {
-    const { spaceId, roleAId } = await createSpace({
-      published: true,
-      cardHints: [{ isExample: true, label: 'نمونه', title: 'کارت نمونه فریبنده', description: 'اگر شمرده شود یعنی باگ است' }],
-    });
+  it('gatherSignals counts real role memberships, and a space with no cards has none', async () => {
+    // This used to seed a labelled sample card hint and prove it inflated
+    // no counter. `cardHints` was dropped on 2026-09-27 - a space now
+    // opens with three real cards instead - so there is no longer any
+    // such thing to exclude, and the honest assertion is the plain one.
+    const { spaceId, roleAId } = await createSpace({ published: true });
     await getPrisma().spaceRoleMembership.create({ data: { spaceId, userId: contributorId, roleId: roleAId } });
 
     const signals = await healthRepo.gatherSignals(spaceId);
     expect(signals.contributorCount).toBe(1);
     expect(signals.totalRoleCount).toBe(2);
     expect(signals.activeRoleCount).toBe(1);
-    // The card hint above exists purely as descriptive JSON - gatherSignals
-    // never reads cardHints at all, so cardCount is unaffected by it.
     expect(signals.cardCount).toBe(0);
   });
 
@@ -106,7 +104,7 @@ describe.skipIf(!databaseAvailable)('SpaceHealthRepository: real Postgres', () =
       data: { spaceId, authorId: userId, kind: 'AWARENESS', status: 'ACTIVE', publishedAt: new Date('2030-01-01T00:00:00Z') },
     });
     await getPrisma().cardRevision.create({
-      data: { cardId: card.id, revisionNumber: 1, title: 'کارت واقعی', body: 'متن', editorId: userId },
+      data: { cardId: card.id, revisionNumber: 1, body: 'متن', editorId: userId },
     });
     await getPrisma().card.create({
       data: { spaceId, authorId: userId, kind: 'AWARENESS', status: 'ARCHIVED', publishedAt: new Date('2029-01-01T00:00:00Z') },

@@ -43,6 +43,7 @@ function fakeSpaceRepo(): SpaceRepository {
     findBySlug: vi.fn().mockResolvedValue(null),
     listByCreator: vi.fn().mockResolvedValue([]),
     followState: vi.fn().mockResolvedValue({ followerCount: 0, isFollowing: false }),
+    recordBuildAttempt: vi.fn(),
     hasSpaceAdminRole: vi.fn().mockResolvedValue(false),
     createNewVersion: vi.fn(),
     createBuiltSpace: vi.fn(),

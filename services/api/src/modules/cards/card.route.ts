@@ -11,6 +11,7 @@ import {
   uploadIntentResponseSchema,
 } from '@taavon/contracts';
 import { apiError } from '../../lib/api-error';
+import { isUuid } from '../../lib/uuid';
 import { getOptionalSession, requireSession } from '../auth/session-guard';
 import type { StorageProvider } from '../storage/storage-provider';
 import {
@@ -225,6 +226,14 @@ export async function cardRoutes(app: FastifyInstance, opts: CardRouteOptions) {
   app.get('/cards/:cardId', async (request, reply) => {
     const { cardId } = request.params as { cardId: string };
     const viewer = getOptionalSession(request, opts.sessionHmacKey);
+
+    // An id that is not an id names no card. Checked here rather than
+    // left to the driver: Postgres rejects a malformed uuid at the
+    // query, which is an error about our SQL, not an answer about this
+    // card - and 404 is the honest answer.
+    if (!isUuid(cardId)) {
+      return reply.code(404).send(apiError(request, 'CARD_NOT_FOUND', 'این کارت یافت نشد.'));
+    }
 
     try {
       const card = await getCard(repo(), cardId);

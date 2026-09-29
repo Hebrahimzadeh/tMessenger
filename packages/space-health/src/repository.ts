@@ -59,8 +59,15 @@ export function createPrismaSpaceHealthRepository(prisma: PrismaClient): SpaceHe
       ].filter((d): d is Date => d !== null);
       const lastActivityAt = activityTimestamps.length > 0 ? new Date(Math.max(...activityTimestamps.map((d) => d.getTime()))) : null;
 
+      // Not an assertion: a caller can always hand over an id this row
+      // cannot support, and throwing here with a sentence naming the
+      // problem beats a TypeError from inside a date subtraction.
+      if (space.publishedAt === null) {
+        throw new Error(`space ${spaceId} is PUBLISHED but has no publishedAt; its health cannot be computed`);
+      }
+
       return {
-        publishedAt: space.publishedAt!,
+        publishedAt: space.publishedAt,
         lastActivityAt,
         contributorCount: memberships.length,
         totalRoleCount: roles,
@@ -121,7 +128,15 @@ export function createPrismaSpaceHealthRepository(prisma: PrismaClient): SpaceHe
     },
 
     async listPublishedSpaceIds() {
-      const spaces = await prisma.space.findMany({ where: { status: 'PUBLISHED' }, select: { id: true } });
+      // `publishedAt: { not: null }` is not redundant with the status.
+      // Every health signal is measured from the publish date, and a row
+      // marked PUBLISHED without one cannot be described at all - it is a
+      // data fault to fix, not a space to score. Leaving it in the list
+      // made `gatherSignals`'s non-null assertion a lie and threw.
+      const spaces = await prisma.space.findMany({
+        where: { status: 'PUBLISHED', publishedAt: { not: null } },
+        select: { id: true },
+      });
       return spaces.map((s) => s.id);
     },
   };

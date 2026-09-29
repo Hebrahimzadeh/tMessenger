@@ -24,6 +24,7 @@ import {
   SpaceNotEditableError,
   SpaceNotFoundError,
   updateSpaceDefinition,
+  type SpaceBuildAttemptRecord,
   type SpaceRepository,
   type SpaceRoleInputRecord,
   type SpaceRoleRecord,
@@ -68,6 +69,8 @@ function fakeSpaceRepo() {
   const invites = new Map<string, { spaceId: string; revokedAt: Date | null }>();
   /** Everything `createBuiltSpace` was told, so a test can assert what a built space carries. */
   const builtAudit: Parameters<SpaceRepository['createBuiltSpace']>[0][] = [];
+  /** Every attempt filed, refusals included, so a test can assert what the archive would hold. */
+  const buildAttempts: SpaceBuildAttemptRecord[] = [];
   /** Everything `setGateVerdict` was told, so a test can assert what the audit trail would carry. */
   const gateAudit: {
     spaceId: string;
@@ -118,6 +121,10 @@ function fakeSpaceRepo() {
 
     async findById(id) {
       return record(id);
+    },
+
+    async recordBuildAttempt(input) {
+      buildAttempts.push(input);
     },
 
     async followState(spaceId, userId) {
@@ -315,7 +322,7 @@ function fakeSpaceRepo() {
     },
   };
 
-  return { repo, spaceAdmins, gateAudit, builtAudit, spaceCount: () => spaces.size, isRoleMember: (userId: string, roleId: string) => roleMemberships.has(`${userId}:${roleId}`) };
+  return { repo, spaceAdmins, gateAudit, builtAudit, buildAttempts, spaceCount: () => spaces.size, isRoleMember: (userId: string, roleId: string) => roleMemberships.has(`${userId}:${roleId}`) };
 }
 
 const TWO_PRIMARY_ROLES: SpaceRoleInputRecord[] = [
@@ -922,6 +929,86 @@ describe('buildSpaceFromPrompt', () => {
     expect(result.matchedPolicyRules[0]).toContain('gambling@v1');
     // No row, so no slug either.
     expect(spaceCount()).toBe(0);
+  });
+
+  describe('the build archive', () => {
+    // Owner request 2026-09-29: every build has to be reviewable afterwards -
+    // what the person asked for, and what we sent the model.
+
+    it('files the prompt verbatim, alongside the space it produced', async () => {
+      const { repo, buildAttempts } = fakeSpaceRepo();
+      const prompt = 'من یه نردبون دارم می‌خوام قرض بدم';
+
+      const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, prompt);
+
+      expect(buildAttempts).toHaveLength(1);
+      expect(buildAttempts[0]).toMatchObject({
+        creatorId: CREATOR,
+        spaceId: result.space!.id,
+        userPrompt: prompt,
+        decision: 'PUBLISH',
+      });
+      // Which wording of the document was in force, so a build stays
+      // explainable after the document changes.
+      expect(buildAttempts[0]!.documentRef).toMatch(/^space-builder:v1:/);
+    });
+
+    it('files a refused prompt too, which before this left no trace anywhere', async () => {
+      const { repo, buildAttempts, spaceCount } = fakeSpaceRepo();
+      const prompt = 'بستری برای شرط‌بندی روی مسابقه‌های محله';
+
+      await buildSpaceFromPrompt(repo, builderWith(), CREATOR, prompt);
+
+      expect(buildAttempts).toHaveLength(1);
+      expect(buildAttempts[0]).toMatchObject({
+        // Null is how a refusal is recorded: no space was made, and none should be.
+        spaceId: null,
+        userPrompt: prompt,
+        decision: 'BLOCK',
+      });
+      expect(buildAttempts[0]!.matchedPolicyRules[0]).toContain('gambling@v1');
+      // Still no row and still no slug - recording the attempt creates nothing.
+      expect(spaceCount()).toBe(0);
+    });
+
+    it('cites no AI call for a prompt refused before any model was asked', async () => {
+      // The policy check runs first precisely so nothing is spent on a space
+      // that may not exist, so there is no request to point at.
+      const { repo, buildAttempts } = fakeSpaceRepo();
+
+      await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'بستری برای شرط‌بندی روی مسابقه‌های محله');
+
+      expect(buildAttempts[0]!.requestId).toBeNull();
+    });
+
+    it('records a space held for review as held, not as refused', async () => {
+      const { repo, buildAttempts } = fakeSpaceRepo();
+
+      await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'صندوق محله با سود تضمینی ماهانه');
+
+      expect(buildAttempts[0]!.decision).toBe('HUMAN_REVIEW');
+      expect(buildAttempts[0]!.spaceId).not.toBeNull();
+    });
+
+    it('says plainly when the rules built the space rather than the model', async () => {
+      const { repo, buildAttempts } = fakeSpaceRepo();
+
+      await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'امانت ابزار محله');
+
+      expect(buildAttempts[0]!.creativityApplied).toBe(false);
+    });
+
+    it('never fails the build over the archive - the space is already made by then', async () => {
+      const { repo } = fakeSpaceRepo();
+      repo.recordBuildAttempt = async () => {
+        throw new Error('archive is down');
+      };
+
+      const result = await buildSpaceFromPrompt(repo, builderWith(), CREATOR, 'امانت ابزار محله');
+
+      expect(result.outcome).toBe('PUBLISHED');
+      expect(result.space).not.toBeNull();
+    });
   });
 
   it('creates a space held for a person, visible to its manager and nobody else', async () => {

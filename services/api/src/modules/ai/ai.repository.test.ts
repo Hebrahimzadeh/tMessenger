@@ -111,6 +111,13 @@ describe.skipIf(!databaseAvailable)('AI against real Postgres', () => {
    * suggestion, and nowhere else. The first draft of this test claimed
    * "nowhere at all", which was simply false, and a test that has to be
    * weakened later teaches nobody anything.
+   *
+   * 2026-09-29 adds the second place, on the owner's instruction: the prompt
+   * archive, which exists so a space can be reviewed later and which expires
+   * its text after ninety days. The list below is exhaustive on purpose - it
+   * is the one place that says, in full, where a person's words come to rest.
+   * A new name appearing here should fail this test and be argued for, not
+   * added quietly.
    */
   it('records an input\'s hash and length, never the input itself', async () => {
     const user = await newUser();
@@ -140,11 +147,18 @@ describe.skipIf(!databaseAvailable)('AI against real Postgres', () => {
       if (Number(hits[0]?.n ?? 0) > 0) found.add(table_name);
     }
 
-    // `ai_results` only, because the card fallback hands back the person's
-    // own words as the draft. Nothing copied it anywhere else - not the
-    // request row, not usage, not any log table.
-    expect([...found]).toEqual(['ai_results']);
+    // Exactly two tables. `ai_results` because the card fallback hands back
+    // the person's own words as the draft, and `ai_prompt_archive` because
+    // keeping the prompt is now the point of that table. Nothing copied it
+    // anywhere else - not the request row, not usage, not any log table.
+    expect([...found].sort()).toEqual(['ai_prompt_archive', 'ai_results']);
     expect(found.has('ai_requests')).toBe(false);
+
+    // And the archive's own promise: the text is there, and it is marked as
+    // not yet expired rather than simply undated.
+    const archive = await prisma.aiPromptArchive.findFirst({ where: { request: { requesterId: user } } });
+    expect(archive?.userText).toBe(secret);
+    expect(archive?.textPurgedAt).toBeNull();
   });
 
   it('records usage, so the budget has something real to count', async () => {

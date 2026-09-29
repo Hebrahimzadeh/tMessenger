@@ -623,3 +623,29 @@ describe('the confirmed inference is what lands on the card', () => {
     await app.close();
   });
 });
+
+describe('an id that is not an id', () => {
+  it('answers 404 rather than letting the driver fail on the query', async () => {
+    // Found live on 2026-09-29: this replied 500 carrying Prisma's own text -
+    // the failing call, the column type and the offending value - to an
+    // anonymous caller.
+    const { cardRepo, attachmentRepo } = fakeRepos();
+    const { app } = buildApp({ cardRepo, attachmentRepo });
+    const res = await app.inject({ method: 'GET', url: '/v1/cards/not-a-uuid' });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('CARD_NOT_FOUND');
+    await app.close();
+  });
+
+  it('leaks nothing about the query that would have run', async () => {
+    const { cardRepo, attachmentRepo } = fakeRepos();
+    const { app } = buildApp({ cardRepo, attachmentRepo });
+    const res = await app.inject({ method: 'GET', url: '/v1/cards/not-a-uuid' });
+
+    const body = res.payload;
+    expect(body).not.toContain('prisma');
+    expect(body).not.toContain('uuid');
+    await app.close();
+  });
+});

@@ -72,6 +72,14 @@ export interface SpaceBuildResult {
   policyVersionRef: string;
   creativityApplied: boolean;
   documentRef: string;
+  /**
+   * The AI call this build made, for the archive to point at.
+   *
+   * Null when the prompt was refused before any model was asked - which
+   * is on purpose: nothing should be spent finding out whether a space
+   * that may not exist would have been any good.
+   */
+  requestId: string | null;
 }
 
 export interface SpaceBuildDeps {
@@ -155,11 +163,13 @@ export async function buildSpace(deps: SpaceBuildDeps, prompt: string, requester
       policyVersionRef: baselineRef,
       creativityApplied: false,
       documentRef: SPACE_BUILDER_DOCUMENT_REF,
+      requestId: null,
     };
   }
 
   let space: SpaceBuildOutput = buildSpaceFromRules(prompt);
   let creativityApplied = false;
+  let requestId: string | null = null;
   try {
     const result = await deps.orchestrator.generate(
       {
@@ -175,6 +185,10 @@ export async function buildSpace(deps: SpaceBuildDeps, prompt: string, requester
         maxOutputTokens: SPACE_BUILD_MAX_OUTPUT_TOKENS,
       }
     );
+    // Recorded whatever the outcome: a call that fell back still asked
+    // something, and what it asked is the half worth reading when a
+    // build comes out wrong.
+    requestId = result.requestId;
     if (result.outcome === 'SUGGESTION' && result.output?.kind === 'SPACE_BUILD') {
       space = result.output;
       creativityApplied = true;
@@ -195,6 +209,7 @@ export async function buildSpace(deps: SpaceBuildDeps, prompt: string, requester
       policyVersionRef: baselineRef,
       creativityApplied,
       documentRef: SPACE_BUILDER_DOCUMENT_REF,
+      requestId,
     };
   }
 
@@ -209,6 +224,7 @@ export async function buildSpace(deps: SpaceBuildDeps, prompt: string, requester
       policyVersionRef: baselineRef,
       creativityApplied,
       documentRef: SPACE_BUILDER_DOCUMENT_REF,
+      requestId,
     };
   }
 
@@ -226,5 +242,6 @@ export async function buildSpace(deps: SpaceBuildDeps, prompt: string, requester
     policyVersionRef: baselineRef,
     creativityApplied,
     documentRef: SPACE_BUILDER_DOCUMENT_REF,
+    requestId,
   };
 }

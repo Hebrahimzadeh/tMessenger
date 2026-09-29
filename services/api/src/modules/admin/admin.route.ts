@@ -7,6 +7,7 @@ import {
   identityClaimDetailResponseSchema,
   identityClaimListResponseSchema,
   reviewIdentityClaimBodySchema,
+  spaceBuildAttemptListResponseSchema,
 } from '@taavon/contracts';
 import type { Prisma, PrismaClient } from '@taavon/database';
 import {
@@ -25,6 +26,11 @@ import {
   type IdentityClaimRepository,
 } from '../identity-claim/identity-claim.service';
 import { assignRole, IdentityClaimNotVerifiedError, UnknownRoleError } from './role-assignment.service';
+import {
+  createPrismaSpaceBuildReviewRepository,
+  listSpaceBuildAttempts,
+  type SpaceBuildReviewRepository,
+} from './space-build-review.service';
 
 export interface AdminAuditEvent {
   action: string;
@@ -56,6 +62,7 @@ export interface AdminRouteOptions {
   roleAssignmentRepository?: RoleAssignmentRepository;
   identityClaimRepository?: IdentityClaimRepository;
   awarenessAggregationRepository?: AwarenessAggregationRepository;
+  spaceBuildReviewRepository?: SpaceBuildReviewRepository;
   audit?: (prisma: PrismaClient, event: AdminAuditEvent) => Promise<void>;
 }
 
@@ -74,6 +81,9 @@ export async function adminRoutes(app: FastifyInstance, opts: AdminRouteOptions)
   function awarenessAggregationRepo(): AwarenessAggregationRepository {
     return opts.awarenessAggregationRepository ?? createPrismaAwarenessAggregationRepository(app.db);
   }
+  function spaceBuildRepo(): SpaceBuildReviewRepository {
+    return opts.spaceBuildReviewRepository ?? createPrismaSpaceBuildReviewRepository(app.db);
+  }
   const audit = opts.audit ?? defaultAudit;
   const authorizeDeps = () => ({ sessionHmacKey: opts.sessionHmacKey, roleRepo: roleRepo() });
 
@@ -81,6 +91,20 @@ export async function adminRoutes(app: FastifyInstance, opts: AdminRouteOptions)
   // "POST /v1/admin/role-assignments فقط SUPERADMIN دارای MFA") -
   // requireRole() itself both checks the role server-side (never trusting
   // anything from the request) and enforces the second-factor challenge.
+
+  /**
+   * Every recent space build: the prompt, the prompt we sent, the document
+   * in force, the decision and what it cost (owner request 2026-09-29).
+   *
+   * SUPERADMIN + MFA like everything else here, and for a stronger reason
+   * than most: these rows are other people's words.
+   */
+  app.get('/space-builds', async (request, reply) => {
+    const authorized = await requireRole('SUPERADMIN')(request, reply, authorizeDeps());
+    if (!authorized) return;
+
+    return spaceBuildAttemptListResponseSchema.parse(await listSpaceBuildAttempts(spaceBuildRepo()));
+  });
 
   app.get('/identity-claims', async (request, reply) => {
     const authorized = await requireRole('SUPERADMIN')(request, reply, authorizeDeps());

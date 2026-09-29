@@ -28,13 +28,23 @@ function cardInput(over: Partial<AiRequestInput> = {}): AiRequestInput {
 }
 
 function fakeRepo(over: Partial<OrchestratorRepository> = {}) {
-  const requests: { id: string; inputHash: string; inputChars: number }[] = [];
+  const requests: {
+    id: string;
+    inputHash: string;
+    inputChars: number;
+    archive: { userText: string; renderedPrompt: string; systemInstruction: string | null };
+  }[] = [];
   const results: { requestId: string; outcome: string; payload: AiOutput | null; errorCode: string | null }[] = [];
   const usage: { requestId: string; costMicros: number }[] = [];
 
   const repo: OrchestratorRepository = {
     async createRequest(input) {
-      const row = { id: `req-${requests.length + 1}`, inputHash: input.inputHash, inputChars: input.inputChars };
+      const row = {
+        id: `req-${requests.length + 1}`,
+        inputHash: input.inputHash,
+        inputChars: input.inputChars,
+        archive: input.archive,
+      };
       requests.push(row);
       return { id: row.id };
     },
@@ -93,12 +103,15 @@ describe('the happy path', () => {
 
     await ai.generate(input, USER);
 
-    const stored = requests[0]!;
+    const { archive, ...stored } = requests[0]!;
     expect(stored.inputChars).toBe(input.text.length);
     expect(stored.inputHash).toMatch(/^[0-9a-f]{64}$/);
-    // The hash identifies a replay; it is not the text.
+    // The hash identifies a replay; it is not the text. The archive is the one
+    // deliberate place the words are kept, and it expires on its own schedule
+    // while this row does not - which is the whole reason for the split.
     expect(stored.inputHash).not.toContain(input.text);
     expect(JSON.stringify(stored)).not.toContain(input.text);
+    expect(archive.userText).toBe(input.text);
   });
 
   it('sends only the one input, never anything the caller did not pass', async () => {
@@ -323,5 +336,54 @@ describe('the prompt', () => {
 
     expect(createRequest).toHaveBeenCalledWith(expect.objectContaining({ promptVersionId: 'prompt-7' }));
     expect(provider.calls[0]!.prompt).toContain('الگو:');
+  });
+
+  describe('archiving what the model was asked', () => {
+    // Owner request 2026-09-29. The table these feed is the only place a
+    // prompt survives; AiRequest still keeps nothing but the hash.
+    it('keeps the caller text and the exact prompt handed to the provider', async () => {
+      const provider = new FakeAiProvider([{ kind: 'ok', text: GOOD_CARD }]);
+      const { ai, requests } = orchestrator(provider, {
+        currentPromptVersion: async () => ({ id: 'prompt-7', template: 'الگو: {{input}}' }),
+      });
+
+      await ai.generate(cardInput(), USER);
+
+      expect(requests[0]!.archive.userText).toBe(cardInput().text);
+      expect(requests[0]!.archive.renderedPrompt).toBe(provider.calls[0]!.prompt);
+    });
+
+    it('keeps the system instruction, which is the strongest lever over what a model does', async () => {
+      const provider = new FakeAiProvider([{ kind: 'ok', text: GOOD_CARD }]);
+      const { ai, requests } = orchestrator(provider);
+
+      await ai.generate(cardInput(), USER, { systemInstruction: 'سند ساخت بستر' });
+
+      expect(requests[0]!.archive.systemInstruction).toBe('سند ساخت بستر');
+    });
+
+    it('records no system instruction when none was sent, rather than an empty one', async () => {
+      const provider = new FakeAiProvider([{ kind: 'ok', text: GOOD_CARD }]);
+      const { ai, requests } = orchestrator(provider);
+
+      await ai.generate(cardInput(), USER);
+
+      expect(requests[0]!.archive.systemInstruction).toBeNull();
+    });
+
+    it('archives what would have been sent even when no provider is configured', async () => {
+      // The outcome on the linked result says FALLBACK, so a reader can tell
+      // this prompt never actually went anywhere - see the model comment.
+      const { ai, requests, results } = orchestrator(null);
+
+      await ai.generate(cardInput(), USER);
+
+      expect(requests[0]!.archive.renderedPrompt).toBe(cardInput().text);
+      expect(results[0]!.outcome).toBe('FALLBACK');
+    });
+
+    // That a refused request archives nothing is covered where the refusal
+    // itself is - see "a policy refusal is not a degraded outcome", which
+    // asserts no request row is written at all.
   });
 });

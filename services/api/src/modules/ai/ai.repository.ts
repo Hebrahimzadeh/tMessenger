@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { PrismaClient } from '@taavon/database';
 import type { AiOutput } from '@taavon/contracts';
 import type { OrchestratorRepository } from './orchestrator';
@@ -31,16 +32,46 @@ export function createPrismaOrchestratorRepository(db: PrismaClient | (() => Pri
     },
 
     async createRequest(input) {
-      return prisma().aiRequest.create({
-        data: {
-          requesterId: input.requesterId,
-          capability: input.capability,
-          source: input.source,
-          promptVersionId: input.promptVersionId,
-          inputHash: input.inputHash,
-          inputChars: input.inputChars,
-        },
-        select: { id: true },
+      // One transaction, so a recorded request always has its prompt. An
+      // archive that can be half missing is one nobody can draw a
+      // conclusion from - "no prompt stored" would mean both "we did not
+      // keep it" and "the second write failed".
+      return prisma().$transaction(async (tx) => {
+        // Stored once per distinct wording, not once per request: the
+        // space-builder document is 8KB and identical across every build.
+        let documentId: string | null = null;
+        const instruction = input.archive.systemInstruction;
+        if (instruction !== null) {
+          const contentHash = createHash('sha256').update(instruction).digest('hex');
+          const document = await tx.aiPromptDocument.upsert({
+            where: { contentHash },
+            // Never rewritten: the same hash is the same words by
+            // definition, so there is nothing an update could correct.
+            update: {},
+            create: { ref: `${input.capability}:${contentHash.slice(0, 12)}`, contentHash, text: instruction },
+            select: { id: true },
+          });
+          documentId = document.id;
+        }
+
+        return tx.aiRequest.create({
+          data: {
+            requesterId: input.requesterId,
+            capability: input.capability,
+            source: input.source,
+            promptVersionId: input.promptVersionId,
+            inputHash: input.inputHash,
+            inputChars: input.inputChars,
+            archive: {
+              create: {
+                userText: input.archive.userText,
+                renderedPrompt: input.archive.renderedPrompt,
+                documentId,
+              },
+            },
+          },
+          select: { id: true },
+        });
       });
     },
 

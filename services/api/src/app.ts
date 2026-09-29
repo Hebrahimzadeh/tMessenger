@@ -139,7 +139,22 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
       reply.code(400).send(apiError(request, 'VALIDATION_ERROR', 'داده ارسالی معتبر نیست.', err.issues));
       return;
     }
-    reply.send(err);
+
+    // A 4xx Fastify raised itself is about the request, and saying so
+    // helps the caller: "Body cannot be empty" and the like.
+    const status = (err as { statusCode?: number }).statusCode ?? 500;
+    if (status < 500) {
+      reply.send(err);
+      return;
+    }
+
+    // Anything else is unexpected, and an unexpected error's message is
+    // not ours to forward. Found live: GET /v1/cards/<not-a-uuid> replied
+    // 500 with Prisma's own text - the failing call, the column type and
+    // the offending value - to an anonymous caller. The correlation id is
+    // the thread back to the log line, which is where the detail belongs.
+    request.log.error({ err }, 'unhandled error');
+    reply.code(500).send(apiError(request, 'INTERNAL_ERROR', 'خطای غیرمنتظره‌ای رخ داد.'));
   });
 
   app.register(healthRoutes, { prefix: '/v1/health', version: pkg.version, ...health });

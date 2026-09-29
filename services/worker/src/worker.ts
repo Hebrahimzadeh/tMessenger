@@ -4,6 +4,7 @@ import IORedis from 'ioredis';
 import { parseWorkerEnv } from './config/env';
 import { processSpaceHealthJob } from './jobs/space-health';
 import { processAwarenessAggregationJob } from './jobs/awareness-aggregation';
+import { PROMPT_TEXT_RETENTION_DAYS, processPromptArchivePurgeJob } from './jobs/prompt-archive-purge';
 import { processNotificationDispatchJob } from './jobs/notification-dispatch';
 
 const env = parseWorkerEnv();
@@ -51,9 +52,16 @@ const worker = new Worker(
   { connection }
 );
 
-worker.on('completed', (job, result: { processedSpaceIds: string[] }) => {
+worker.on('completed', (job, result: { processedSpaceIds: string[]; failures: { spaceId: string; message: string }[] }) => {
   // eslint-disable-next-line no-console -- this process has no HTTP request/response cycle to attach structured logging to; console is the worker's own log stream (matches its own docker-compose/deploy log capture).
   console.log(`[space-health] job ${job.id} completed - processed ${result.processedSpaceIds.length} space(s)`);
+  // The run no longer stops at the first space it cannot compute, so
+  // the ones it skipped have to be said out loud - otherwise a space
+  // quietly keeps a stale snapshot forever and nothing ever mentions it.
+  for (const failure of result.failures) {
+    // eslint-disable-next-line no-console -- see above.
+    console.error(`[space-health] skipped space ${failure.spaceId}: ${failure.message}`);
+  }
 });
 
 worker.on('failed', (job, err) => {
@@ -151,3 +159,47 @@ notificationWorker.on('failed', (job, err) => {
 await scheduleNotificationJob();
 // eslint-disable-next-line no-console -- see the completed handler's own comment above.
 console.log('[worker] notification-dispatch worker started; draining the outbox every 10s');
+
+// --- prompt archive purge: a fourth queue, a retention deadline ------------
+// The prompt archive (owner request 2026-09-29) keeps what a model was asked
+// so a space can be reviewed later. It keeps it for ninety days and no
+// longer - and a retention promise nothing enforces is not a promise. Hence
+// its own queue: if this one stops, the archive quietly stops expiring, and
+// that is worth seeing on its own rather than buried in another job's log.
+//
+// 04:00, after the two aggregations, purely to stagger load. The job is
+// idempotent (rows already stamped are skipped), so a missed day costs
+// nothing but a day.
+const PURGE_QUEUE_NAME = 'prompt-archive-purge';
+const PURGE_DAILY_JOB_NAME = 'daily-prompt-archive-purge';
+
+const purgeQueue = new Queue(PURGE_QUEUE_NAME, { connection });
+
+async function schedulePurgeDailyJob(): Promise<void> {
+  await purgeQueue.upsertJobScheduler(
+    PURGE_DAILY_JOB_NAME,
+    { pattern: '0 4 * * *' }, // 04:00 server time, every day
+    { name: PURGE_DAILY_JOB_NAME }
+  );
+}
+
+const purgeWorker = new Worker(PURGE_QUEUE_NAME, async () => processPromptArchivePurgeJob(), { connection });
+
+purgeWorker.on('completed', (job, result: { archiveRows: number; attemptRows: number }) => {
+  // Logged even when it clears nothing, unlike the notification job: this
+  // runs once a day, and "it ran and found nothing expired" is the evidence
+  // that the retention promise is still being kept.
+  // eslint-disable-next-line no-console -- see the space-health completed handler's own comment above.
+  console.log(
+    `[prompt-archive-purge] job ${job.id} completed - cleared ${result.archiveRows} archive row(s) and ${result.attemptRows} build attempt(s)`
+  );
+});
+
+purgeWorker.on('failed', (job, err) => {
+  // eslint-disable-next-line no-console -- see the space-health failed handler's own comment above.
+  console.error(`[prompt-archive-purge] job ${job?.id ?? '(unknown)'} failed`, err);
+});
+
+await schedulePurgeDailyJob();
+// eslint-disable-next-line no-console -- see the completed handler's own comment above.
+console.log(`[worker] prompt-archive-purge worker started; daily job at 04:00, retention ${PROMPT_TEXT_RETENTION_DAYS} days`);

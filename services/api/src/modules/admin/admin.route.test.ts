@@ -8,6 +8,8 @@ import type { RoleAssignmentRepository } from '../auth/role-assignment.repositor
 import type { IdentityClaimRepository } from '../identity-claim/identity-claim.service';
 import type { RoleKey } from '@taavon/database';
 import type { AwarenessAggregationRepository } from '@taavon/awareness';
+import type { SpaceBuildAttemptContract } from '@taavon/contracts';
+import type { SpaceBuildReviewRepository } from './space-build-review.service';
 
 function fakeAwarenessAggregationRepo(
   days: Array<{ date: Date; producedCount: number; meaningfulViewCount: number; publicContributionCount: number; appliedCount: number; privateChatStartedCount: number; reservationClosedCount: number; computedAt: Date }> = []
@@ -72,11 +74,20 @@ function fakeClaimRepo(seed: Record<string, { status: 'PENDING' | 'VERIFIED' | '
   return { repo, claims };
 }
 
+function fakeSpaceBuildReviewRepo(items: SpaceBuildAttemptContract[] = []): SpaceBuildReviewRepository {
+  return {
+    async listRecentAttempts() {
+      return items;
+    },
+  };
+}
+
 function buildApp(
   roleRepo: RoleAssignmentRepository,
   claimRepo: IdentityClaimRepository,
   audit = vi.fn(async (_prisma: unknown, _event: unknown) => undefined),
-  awarenessAggregationRepository: AwarenessAggregationRepository = fakeAwarenessAggregationRepo()
+  awarenessAggregationRepository: AwarenessAggregationRepository = fakeAwarenessAggregationRepo(),
+  spaceBuildReviewRepository: SpaceBuildReviewRepository = fakeSpaceBuildReviewRepo()
 ) {
   const app = Fastify();
   app.register(cookie);
@@ -88,6 +99,7 @@ function buildApp(
     identityClaimRepository: claimRepo,
     audit,
     awarenessAggregationRepository,
+    spaceBuildReviewRepository,
   });
   return { app, audit };
 }
@@ -335,5 +347,87 @@ describe('GET /admin/metrics/awareness', () => {
     expect(JSON.stringify(body)).not.toContain('userId');
     expect(JSON.stringify(body)).not.toContain('score');
     await app.close();
+  });
+});
+
+describe('GET /admin/space-builds', () => {
+  const BUILT: SpaceBuildAttemptContract = {
+    id: '99999999-9999-4999-8999-999999999999',
+    createdAt: '2026-09-29T10:00:00.000Z',
+    decision: 'PUBLISH',
+    reason: 'بستر ساخته و منتشر شد.',
+    policyVersionRef: 'baseline:v1:8rules',
+    matchedPolicyRules: [],
+    creativityApplied: true,
+    documentRef: 'space-builder:v1:ab12cd34ef56',
+    creatorId: '11111111-1111-4111-8111-111111111111',
+    space: { id: '22222222-2222-4222-8222-222222222222', slug: 'amanat', title: 'امانت ابزار' },
+    userPrompt: 'همسایه‌ها وسایل به هم امانت بدهند',
+    renderedPrompt: '<<<درخواست_کاربر\nهمسایه‌ها وسایل به هم امانت بدهند\nدرخواست_کاربر>>>',
+    systemInstruction: 'تعاون‌آفرینی چیست...',
+    textPurgedAt: null,
+    call: { outcome: 'SUGGESTION', errorCode: null, latencyMs: 14_200, model: 'gemini-3.6-flash', costMicros: 120 },
+  };
+
+  it('returns both prompts and the document that was in force', async () => {
+    const { repo } = fakeRoleRepo({ '11111111-1111-4111-8111-111111111111': ['SUPERADMIN'] });
+    const { app } = buildApp(repo, fakeClaimRepo().repo, undefined, undefined, fakeSpaceBuildReviewRepo([BUILT]));
+
+    const res = await app.inject({ method: 'GET', url: '/v1/admin/space-builds', cookies: superadminCookies() });
+
+    expect(res.statusCode).toBe(200);
+    const item = res.json().items[0];
+    expect(item.userPrompt).toBe(BUILT.userPrompt);
+    expect(item.renderedPrompt).toBe(BUILT.renderedPrompt);
+    expect(item.systemInstruction).toBe(BUILT.systemInstruction);
+  });
+
+  it('says how long text is kept, so an empty prompt is not a mystery', async () => {
+    const { repo } = fakeRoleRepo({ '11111111-1111-4111-8111-111111111111': ['SUPERADMIN'] });
+    const { app } = buildApp(repo, fakeClaimRepo().repo, undefined, undefined, fakeSpaceBuildReviewRepo([BUILT]));
+
+    const res = await app.inject({ method: 'GET', url: '/v1/admin/space-builds', cookies: superadminCookies() });
+
+    expect(res.json().retentionDays).toBe(90);
+  });
+
+  it('carries a refused attempt, which has no space and is the point of the list', async () => {
+    const blocked: SpaceBuildAttemptContract = {
+      ...BUILT,
+      decision: 'BLOCK',
+      space: null,
+      renderedPrompt: null,
+      call: null,
+      matchedPolicyRules: ['gambling@v1 — قانون مجازات اسلامی'],
+      userPrompt: 'بستری برای شرط‌بندی',
+    };
+    const { repo } = fakeRoleRepo({ '11111111-1111-4111-8111-111111111111': ['SUPERADMIN'] });
+    const { app } = buildApp(repo, fakeClaimRepo().repo, undefined, undefined, fakeSpaceBuildReviewRepo([blocked]));
+
+    const res = await app.inject({ method: 'GET', url: '/v1/admin/space-builds', cookies: superadminCookies() });
+
+    expect(res.json().items[0]).toMatchObject({ decision: 'BLOCK', space: null, userPrompt: 'بستری برای شرط‌بندی' });
+  });
+
+  it('refuses anyone who is not a superadmin - these rows are other people\u2019s words', async () => {
+    const { repo } = fakeRoleRepo({ '11111111-1111-4111-8111-111111111111': [] });
+    const { app } = buildApp(repo, fakeClaimRepo().repo, undefined, undefined, fakeSpaceBuildReviewRepo([BUILT]));
+
+    const res = await app.inject({ method: 'GET', url: '/v1/admin/space-builds', cookies: superadminCookies() });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('refuses a superadmin who has not passed the second factor', async () => {
+    const { repo } = fakeRoleRepo({ '11111111-1111-4111-8111-111111111111': ['SUPERADMIN'] });
+    const { app } = buildApp(repo, fakeClaimRepo().repo, undefined, undefined, fakeSpaceBuildReviewRepo([BUILT]));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/space-builds',
+      cookies: { [ACCESS_TOKEN_COOKIE]: signAccessToken('11111111-1111-4111-8111-111111111111', SESSION_HMAC_KEY) },
+    });
+
+    expect(res.statusCode).toBe(403);
   });
 });

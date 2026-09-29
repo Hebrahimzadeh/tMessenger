@@ -70,3 +70,63 @@ describe('runSpaceHealthJob', () => {
     expect(repo.upserts).toHaveLength(0);
   });
 });
+
+describe('runSpaceHealthJob: one bad space is not a bad run', () => {
+  const SIGNALS: HealthSignals = {
+    publishedAt: PUBLISHED_AT,
+    lastActivityAt: PUBLISHED_AT,
+    contributorCount: 3,
+    totalRoleCount: 2,
+    activeRoleCount: 2,
+    cardCount: 0,
+  };
+
+  /** Throws for one named space and behaves for the rest. */
+  function repoFailingOn(badSpaceId: string, spaceIds: string[]): SpaceHealthRepository & { upserts: string[] } {
+    const upserts: string[] = [];
+    return {
+      upserts,
+      async listPublishedSpaceIds() {
+        return spaceIds;
+      },
+      async gatherSignals(spaceId) {
+        if (spaceId === badSpaceId) throw new Error(`space ${spaceId} is PUBLISHED but has no publishedAt`);
+        return SIGNALS;
+      },
+      async upsertSnapshot(spaceId) {
+        upserts.push(spaceId);
+      },
+      async getSnapshot() {
+        return null;
+      },
+    };
+  }
+
+  it('carries on past a space it cannot compute, and still does all the others', async () => {
+    // Found 2026-09-29: one PUBLISHED row with no publishedAt threw inside
+    // the health computation and ended the pass, so every space after it
+    // silently kept a stale snapshot.
+    const repo = repoFailingOn('bad', ['a', 'bad', 'b', 'c']);
+
+    const result = await runSpaceHealthJob(repo);
+
+    expect(result.processedSpaceIds).toEqual(['a', 'b', 'c']);
+    expect(repo.upserts).toEqual(['a', 'b', 'c']);
+  });
+
+  it('reports what it could not do, rather than leaving it merely absent', async () => {
+    const repo = repoFailingOn('bad', ['a', 'bad']);
+
+    const result = await runSpaceHealthJob(repo);
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]!.spaceId).toBe('bad');
+    expect(result.failures[0]!.message).toContain('publishedAt');
+  });
+
+  it('reports no failures on a clean run', async () => {
+    const repo = repoFailingOn('nobody', ['a', 'b']);
+    const result = await runSpaceHealthJob(repo);
+    expect(result.failures).toEqual([]);
+  });
+});

@@ -186,6 +186,23 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
       return found !== null;
     },
 
+    async recordBuildAttempt(input) {
+      await prisma.spaceBuildAttempt.create({
+        data: {
+          creatorId: input.creatorId,
+          spaceId: input.spaceId,
+          userPrompt: input.userPrompt,
+          requestId: input.requestId,
+          documentRef: input.documentRef,
+          decision: input.decision,
+          reason: input.reason,
+          policyVersionRef: input.policyVersionRef,
+          matchedPolicyRules: input.matchedPolicyRules,
+          creativityApplied: input.creativityApplied,
+        },
+      });
+    },
+
     async followState(spaceId, userId) {
       const [followerCount, own] = await Promise.all([
         prisma.spaceFollower.count({ where: { spaceId } }),

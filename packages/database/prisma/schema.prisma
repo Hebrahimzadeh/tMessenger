@@ -96,6 +96,7 @@ model User {
   notifications                   Notification[]           @relation("NotificationRecipient")
   notificationPreference          NotificationPreference?  @relation("NotificationPreferenceUser")
   aiRequests                      AiRequest[]              @relation("AiRequester")
+  spaceBuildAttempts              SpaceBuildAttempt[]      @relation("SpaceBuildAttemptCreator")
 
   @@index([status])
   @@map("users")
@@ -401,6 +402,7 @@ model Space {
   healthSnapshot     SpaceHealthSnapshot?
   cards              Card[]
   cardPins           CardPin[]
+  buildAttempts      SpaceBuildAttempt[]      @relation("SpaceBuildAttemptSpace")
 
   @@index([status])
   @@map("spaces")
@@ -1296,6 +1298,8 @@ model AiRequest {
   promptVersion PromptVersion? @relation(fields: [promptVersionId], references: [id], onDelete: Restrict)
   result        AiResult?
   usage         ProviderUsage?
+  archive       AiPromptArchive?
+  buildAttempt  SpaceBuildAttempt?
 
   @@index([requesterId, createdAt])
   @@map("ai_requests")
@@ -1420,4 +1424,112 @@ model PolicyVersion {
 
   @@unique([definitionId, version])
   @@map("policy_versions")
+}
+
+// Prompt archival for review (owner request 2026-09-29). Additive only.
+//
+// This reverses, deliberately and on the record, the minimization the AI
+// tables were built with: AiRequest keeps a hash of its input precisely so
+// the text need not be kept. It is kept now because a platform that has a
+// model design its spaces has to be able to answer "what was it asked, and
+// what exactly did we send it" months later.
+//
+// Two things keep that from being a licence to hoard. The policy guard still
+// refuses to let private correspondence reach a model at all, so nothing
+// archived here is anything but text a person deliberately submitted towards
+// something public. And the text expires: a daily job nulls it after
+// PROMPT_TEXT_RETENTION_DAYS and stamps `textPurgedAt`, leaving the decision,
+// the rules it cited and what it cost behind forever.
+
+/// A system instruction, stored once rather than once per request.
+///
+/// `space-builder.md` is 8KB and identical across every build, so the archive
+/// references it instead of copying it. Never purged: it is this project's own
+/// document, not anybody's personal data, and it is the half that makes an
+/// expired record still explainable - you can always see what the model was
+/// told, even once you can no longer see what it was asked.
+model AiPromptDocument {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// The versioned reference the capability cites, e.g. "space-builder:v1:ab12cd34ef56".
+  ref         String
+  /// SHA-256 of `text`. The identity: the same wording is the same row.
+  contentHash String   @unique
+  text        String
+  firstSeenAt DateTime @default(now()) @db.Timestamptz(6)
+
+  archives AiPromptArchive[]
+
+  @@index([ref])
+  @@map("ai_prompt_documents")
+}
+
+/// What one AI call was actually asked, alongside the AiRequest that already
+/// records how it went.
+///
+/// `renderedPrompt` is what was handed to the provider, or - when the call
+/// never reached one because the provider is off, the circuit is open, or the
+/// budget is spent - what would have been. Which of the two it is, is not
+/// guesswork: the linked AiResult's outcome says FALLBACK for every call that
+/// never went out.
+model AiPromptArchive {
+  id             String    @id @default(uuid()) @db.Uuid
+  requestId      String    @unique @db.Uuid
+  /// Exactly what the caller passed in, before any template wrapped it. Null once purged.
+  userText       String?
+  /// Exactly the user turn sent to the provider. Null once purged.
+  renderedPrompt String?
+  documentId     String?   @db.Uuid
+  /// Set when the daily job clears the text. Null means "still here", not "never recorded".
+  textPurgedAt   DateTime? @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+
+  request  AiRequest         @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  document AiPromptDocument? @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  @@map("ai_prompt_archive")
+}
+
+/// What a space build decided. Mirrors SpaceBuildDecision in the API rather
+/// than reusing SpaceGateVerdict, which is the *edit* gate's vocabulary and
+/// has a REVISE a build never produces.
+enum SpaceBuildDecision {
+  PUBLISH
+  HUMAN_REVIEW
+  BLOCK
+}
+
+/// One attempt to build a space from a prompt, whatever came of it.
+///
+/// `spaceId` is nullable because that is how a refusal is recorded: a blocked
+/// prompt makes no space, and before this table it left no trace anywhere -
+/// the policy check runs before the model, so there is not even an AiRequest.
+/// Those are the attempts most worth reading.
+model SpaceBuildAttempt {
+  id                 String             @id @default(uuid()) @db.Uuid
+  creatorId          String             @db.Uuid
+  spaceId            String?            @db.Uuid
+  /// Verbatim, as the person typed it. Null once purged.
+  userPrompt         String?
+  textPurgedAt       DateTime?          @db.Timestamptz(6)
+  /// The AI call this attempt made, when it made one. Null when the prompt was
+  /// refused before the model, and null when no provider was configured.
+  requestId          String?            @unique @db.Uuid
+  /// Which wording of the space-builder document was in force.
+  documentRef        String?
+  decision           SpaceBuildDecision
+  reason             String
+  policyVersionRef   String
+  matchedPolicyRules Json
+  /// False when the rules built the space rather than the model.
+  creativityApplied  Boolean
+  createdAt          DateTime           @default(now()) @db.Timestamptz(6)
+
+  creator User       @relation("SpaceBuildAttemptCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  space   Space?     @relation("SpaceBuildAttemptSpace", fields: [spaceId], references: [id], onDelete: SetNull)
+  request AiRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([decision, createdAt])
+  @@map("space_build_attempts")
 }

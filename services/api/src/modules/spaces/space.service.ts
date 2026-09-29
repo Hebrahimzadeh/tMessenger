@@ -167,6 +167,14 @@ export interface SpaceRepository {
    * excludes everything but PUBLISHED.
    */
   listByCreator(creatorId: string, limit: number): Promise<MySpaceRecord[]>;
+  /**
+   * Files one attempt to build a space from a prompt, whatever came of it.
+   *
+   * Separate from `createBuiltSpace` rather than folded into it because a
+   * refused prompt builds no space and still has to be recorded - those
+   * are the attempts most worth reading later.
+   */
+  recordBuildAttempt(input: SpaceBuildAttemptRecord): Promise<void>;
   /** How many people follow this space, and whether this caller is one of them (false for an anonymous caller). */
   followState(spaceId: string, userId: string | null): Promise<{ followerCount: number; isFollowing: boolean }>;
   /** SPACE-scoped SPACE_ADMIN role assignment (see schema.prisma's RoleAssignment) - the creator check itself is done by the service, not the repository. */
@@ -384,6 +392,21 @@ export interface SpaceBuilder {
   build(prompt: string, requesterId: string | null): Promise<SpaceBuildResult>;
 }
 
+/** One row of the build archive - see schema.prisma's SpaceBuildAttempt. */
+export interface SpaceBuildAttemptRecord {
+  creatorId: string;
+  /** Null when nothing was built, which is how a refusal is recorded. */
+  spaceId: string | null;
+  userPrompt: string;
+  requestId: string | null;
+  documentRef: string | null;
+  decision: 'PUBLISH' | 'HUMAN_REVIEW' | 'BLOCK';
+  reason: string;
+  policyVersionRef: string;
+  matchedPolicyRules: string[];
+  creativityApplied: boolean;
+}
+
 export interface BuildSpaceOutcome {
   outcome: 'PUBLISHED' | 'HUMAN_REVIEW' | 'BLOCKED';
   space: { id: string; slug: string } | null;
@@ -408,6 +431,22 @@ export interface BuildSpaceOutcome {
  * A BLOCK is an answer, not an error. Nothing is created, no slug is taken,
  * and the person gets the rule that matched so they know what to rewrite.
  */
+/**
+ * Files the attempt, and never fails the person's request over it.
+ *
+ * A swallowed error is the wrong default almost everywhere, and it is the
+ * right one here: the space is already built and published by this point,
+ * and throwing now would report a failure for work that succeeded. The
+ * archive is for review, not for correctness.
+ */
+async function recordAttempt(repo: SpaceRepository, record: SpaceBuildAttemptRecord): Promise<void> {
+  try {
+    await repo.recordBuildAttempt(record);
+  } catch {
+    // Deliberately silent to the caller. The row is missing; the space is not.
+  }
+}
+
 export async function buildSpaceFromPrompt(
   repo: SpaceRepository,
   builder: SpaceBuilder,
@@ -417,6 +456,21 @@ export async function buildSpaceFromPrompt(
   const result = await builder.build(prompt, creatorId);
 
   if (result.decision === 'BLOCK' || !result.space) {
+    // The one path that used to vanish. A refusal made no space, so it
+    // appeared in no table anywhere - and a refusal nobody can review is
+    // indistinguishable from a rule that is simply wrong.
+    await recordAttempt(repo, {
+      creatorId,
+      spaceId: null,
+      userPrompt: prompt,
+      requestId: result.requestId,
+      documentRef: result.documentRef,
+      decision: 'BLOCK',
+      reason: result.reason,
+      policyVersionRef: result.policyVersionRef,
+      matchedPolicyRules: result.matchedPolicyRules,
+      creativityApplied: result.creativityApplied,
+    });
     return {
       outcome: 'BLOCKED',
       space: null,
@@ -466,6 +520,19 @@ export async function buildSpaceFromPrompt(
     policyVersionRef: result.policyVersionRef,
     matchedPolicyRules: result.matchedPolicyRules,
     documentRef: result.documentRef,
+    creativityApplied: result.creativityApplied,
+  });
+
+  await recordAttempt(repo, {
+    creatorId,
+    spaceId: id,
+    userPrompt: prompt,
+    requestId: result.requestId,
+    documentRef: result.documentRef,
+    decision: publish ? 'PUBLISH' : 'HUMAN_REVIEW',
+    reason: result.reason,
+    policyVersionRef: result.policyVersionRef,
+    matchedPolicyRules: result.matchedPolicyRules,
     creativityApplied: result.creativityApplied,
   });
 

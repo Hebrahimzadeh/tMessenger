@@ -30,8 +30,30 @@ export interface AiUsageRecord {
   costMicros: number;
 }
 
+/**
+ * What the model was asked, kept for review (owner request 2026-09-29).
+ *
+ * Written in the same breath as the AiRequest rather than afterwards, so
+ * a recorded request always has its prompt: an archive that can be half
+ * missing is an archive nobody can draw a conclusion from.
+ */
+export interface PromptArchiveInput {
+  /** Exactly what the caller passed in, before any template wrapped it. */
+  userText: string;
+  /** Exactly the user turn handed to the provider - or would have been, if the call never left. */
+  renderedPrompt: string;
+  /** The document sent as the system instruction, when a capability sent one. */
+  systemInstruction: string | null;
+}
+
 export interface OrchestratorRepository {
-  /** Records the attempt. Stores the input's hash and length, never its text. */
+  /**
+   * Records the attempt, and what it asked.
+   *
+   * `inputHash`/`inputChars` stay on AiRequest itself and still carry no
+   * text - the words live in the archive, which expires on its own
+   * schedule while the request record does not.
+   */
   createRequest(input: {
     requesterId: string | null;
     capability: AiCapability;
@@ -39,6 +61,7 @@ export interface OrchestratorRepository {
     promptVersionId: string | null;
     inputHash: string;
     inputChars: number;
+    archive: PromptArchiveInput;
   }): Promise<{ id: string }>;
   recordResult(input: {
     requestId: string;
@@ -155,14 +178,24 @@ export class AiOrchestrator {
     );
 
     const promptVersion = await this.opts.repository.currentPromptVersion(input.capability);
+    // Rendered here rather than at the provider call below, so the archive
+    // written with the request holds the real prompt. It is a pure
+    // function of the template and the input, so moving it earlier
+    // changes nothing about what is sent.
+    const renderedPrompt = renderPrompt(promptVersion?.template ?? null, input.text);
     const request = await this.opts.repository.createRequest({
       requesterId,
       capability: input.capability,
       source: input.source,
       promptVersionId: promptVersion?.id ?? null,
-      // The hash lets a replay be recognised; the text is not kept.
+      // The hash lets a replay be recognised without reading the archive.
       inputHash: createHash('sha256').update(input.text).digest('hex'),
       inputChars: input.text.length,
+      archive: {
+        userText: input.text,
+        renderedPrompt,
+        systemInstruction: options.systemInstruction ?? null,
+      },
     });
 
     const startedAt = this.now();
@@ -203,7 +236,7 @@ export class AiOrchestrator {
         capability: input.capability,
         // Minimization: the prompt is the template plus this one input, never
         // a conversation history or anything the caller did not pass.
-        prompt: renderPrompt(promptVersion?.template ?? null, input.text),
+        prompt: renderedPrompt,
         systemInstruction: options.systemInstruction,
         timeoutMs: options.timeoutMs ?? this.timeoutMs,
         maxOutputTokens: options.maxOutputTokens,

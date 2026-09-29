@@ -30,6 +30,8 @@ function fakeSpaceRepo(): SpaceRepository {
   const rolesBySpace = new Map<string, SpaceRoleRecord[]>();
   /** spaceId -> the users following it. The fake has no follow endpoint; the tests that care seed it directly. */
   const followersBySpace = new Map<string, Set<string>>();
+  /** Every attempt filed, refusals included. */
+  const buildAttempts: unknown[] = [];
   const invites = new Map<string, { spaceId: string; revokedAt: Date | null }>();
   const builtAudit: Parameters<SpaceRepository['createBuiltSpace']>[0][] = [];
   const newId = (_prefix: string) => randomUUID();
@@ -68,6 +70,10 @@ function fakeSpaceRepo(): SpaceRepository {
     async findById(id) {
       return record(id);
     },
+    async recordBuildAttempt(input) {
+      buildAttempts.push(input);
+    },
+
     async followState(spaceId, userId) {
       const followers = followersBySpace.get(spaceId) ?? new Set<string>();
       return { followerCount: followers.size, isFollowing: userId !== null && followers.has(userId) };
