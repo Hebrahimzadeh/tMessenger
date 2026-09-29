@@ -19,11 +19,11 @@ const OWNER = '22222222-2222-4222-8222-222222222222';
 const STRANGER = '33333333-3333-4333-8333-333333333333';
 
 function fakePinRepo() {
-  const cards = new Map<string, { spaceId: string; cardStatus: CardStatus; spaceStatus: SpaceStatus; title: string }>();
+  const cards = new Map<string, { spaceId: string; cardStatus: CardStatus; spaceStatus: SpaceStatus; caption: string }>();
   const pins = new Map<string, PinnedCardRecord>(); // cardId -> record
 
-  function seedCard(cardId: string, over: Partial<{ cardStatus: CardStatus; spaceStatus: SpaceStatus; title: string }> = {}) {
-    cards.set(cardId, { spaceId: SPACE, cardStatus: over.cardStatus ?? 'ACTIVE', spaceStatus: over.spaceStatus ?? 'PUBLISHED', title: over.title ?? 'کارت' });
+  function seedCard(cardId: string, over: Partial<{ cardStatus: CardStatus; spaceStatus: SpaceStatus; caption: string }> = {}) {
+    cards.set(cardId, { spaceId: SPACE, cardStatus: over.cardStatus ?? 'ACTIVE', spaceStatus: over.spaceStatus ?? 'PUBLISHED', caption: over.caption ?? 'کارت' });
   }
 
   const repo: PinRepository = {
@@ -41,7 +41,7 @@ function fakePinRepo() {
       return pins.has(cardId);
     },
     async pin({ cardId, position }) {
-      pins.set(cardId, { cardId, position, title: cards.get(cardId)!.title, pinnedAt: new Date() });
+      pins.set(cardId, { cardId, position, caption: cards.get(cardId)!.caption, pinnedAt: new Date() });
     },
     async unpin({ cardId }) {
       return pins.delete(cardId);

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { User, Bookmark, Info } from '@/components/icons';
 import { useUI } from '@/hooks/useUI';
 import { CURRENT_USER } from '@/lib/data/seed';
@@ -33,10 +34,14 @@ export function Drawer() {
             <User size={20} className="text-gray-500" />
             <span>پروفایل من</span>
           </button>
-          <button className="w-full flex items-center gap-4 px-5 py-3 hover:bg-gray-50 transition">
+          <Link
+            href="/bookmarks"
+            onClick={closeDrawer}
+            className="w-full flex items-center gap-4 px-5 py-3 hover:bg-gray-50 transition"
+          >
             <Bookmark size={20} className="text-gray-500" />
             <span>نشان‌شده‌ها</span>
-          </button>
+          </Link>
           <div className="h-px bg-gray-200 my-1 mx-5" />
           <button className="w-full flex items-center gap-4 px-5 py-3 hover:bg-gray-50 transition">
             <Info size={20} className="text-gray-500" />

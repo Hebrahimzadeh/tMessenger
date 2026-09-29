@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EXAMPLE_CARD_NOTICE, spaceCreationGuidanceSchema } from '@taavon/contracts';
+import { spaceCreationGuidanceSchema } from '@taavon/contracts';
 import { AiOrchestrator, type OrchestratorRepository } from '../orchestrator';
 import { FakeAiProvider } from '../providers/fake-provider';
 import { GUIDANCE_FIXTURES } from './space-guidance.fixtures';
@@ -125,7 +125,7 @@ describe('disagreement is not a violation', () => {
 
 describe('a vague sentence becomes an editable plan, not a form', () => {
   it.each(['یه کار خوب برای محله', 'کمک کنیم', 'یه برنامه‌ای برای بچه‌ها'])(
-    'turns "%s" into roles, a chain, an example card and stated assumptions',
+    'turns "%s" into roles, a chain, an opening card and stated assumptions',
     async (text) => {
       const result = await guideSpaceCreation(
         deps(),
@@ -135,7 +135,7 @@ describe('a vague sentence becomes an editable plan, not a form', () => {
 
       expect(result.participationRoles.length).toBeGreaterThan(0);
       expect(result.valueChainNodes.length).toBeGreaterThan(0);
-      expect(result.exampleCardTemplates.length).toBeGreaterThan(0);
+      expect(result.openingCardDrafts.length).toBeGreaterThan(0);
       expect(result.questions.length).toBeGreaterThan(0);
       // The assumptions it had to make are stated rather than hidden.
       expect(result.assumptions.length).toBeGreaterThan(0);
@@ -192,17 +192,22 @@ describe('the person\'s intent is never silently rewritten', () => {
   });
 });
 
-describe('example cards cannot be mistaken for real content', () => {
-  it('marks every one as an example, with the required notice', async () => {
+describe('an opening card is a draft to publish, not a labelled mock-up', () => {
+  it('proposes a caption and the first comment under it, with no "not real content" notice', async () => {
     const result = await guideSpaceCreation(deps(), proposal(), null);
 
-    for (const template of result.exampleCardTemplates) {
-      expect(template.isExample).toBe(true);
-      expect(template.notice).toBe(EXAMPLE_CARD_NOTICE);
+    expect(result.openingCardDrafts.length).toBeGreaterThan(0);
+    for (const draft of result.openingCardDrafts) {
+      expect(draft.caption.length).toBeGreaterThan(0);
+      expect(draft.comment.length).toBeGreaterThan(0);
+      // Nothing in it tells a reader it is fake - that is the whole change
+      // (owner, 2026-09-27): a card that says so sets the wrong norm.
+      expect(`${draft.caption} ${draft.comment}`).not.toContain('نمونه');
+      expect(`${draft.caption} ${draft.comment}`).not.toContain('محتوای واقعی نیست');
     }
   });
 
-  it('cannot be constructed otherwise - the schema fixes both fields', () => {
+  it('has no isExample flag or notice left to set', () => {
     const base = {
       title: 'ت',
       purpose: 'هدف',
@@ -214,25 +219,22 @@ describe('example cards cannot be mistaken for real content', () => {
       participationRoles: [],
       valueChainNodes: [],
       suggestedToolKeys: [],
-      creationDecision: 'ALLOW',
+      creationDecision: 'ALLOW' as const,
       matchedPolicyRules: [],
-      safetyLevel: 'NORMAL',
+      safetyLevel: 'NORMAL' as const,
       policyVersionRef: 'baseline:v1',
     };
 
-    // A flag anything could set to false is not a flag.
     expect(
       spaceCreationGuidanceSchema.safeParse({
         ...base,
-        exampleCardTemplates: [{ title: 'ن', body: 'ب', isExample: false, notice: EXAMPLE_CARD_NOTICE }],
+        openingCardDrafts: [{ caption: 'یک کارت واقعی', comment: 'یک پرسش' }],
       }).success
-    ).toBe(false);
-
+    ).toBe(true);
+    // An empty half is not a card anybody could publish as it stands.
     expect(
-      spaceCreationGuidanceSchema.safeParse({
-        ...base,
-        exampleCardTemplates: [{ title: 'ن', body: 'ب', isExample: true, notice: 'محتوای واقعی' }],
-      }).success
+      spaceCreationGuidanceSchema.safeParse({ ...base, openingCardDrafts: [{ caption: 'یک کارت واقعی', comment: '' }] })
+        .success
     ).toBe(false);
   });
 });
@@ -255,7 +257,7 @@ describe('an outage cannot be used to get around the gate', () => {
 
     expect(result.creationDecision).toBe('ALLOW');
     expect(result.participationRoles.length).toBeGreaterThan(0);
-    expect(result.exampleCardTemplates.length).toBeGreaterThan(0);
+    expect(result.openingCardDrafts.length).toBeGreaterThan(0);
   });
 
   it('reaches the same decision with and without the model', async () => {

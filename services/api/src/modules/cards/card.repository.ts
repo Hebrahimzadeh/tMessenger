@@ -40,7 +40,6 @@ function toCardRecord(card: CardWithRelations): CardRecord {
     publishedAt: card.publishedAt,
     latestRevision: {
       revisionNumber: revision.revisionNumber,
-      title: revision.title,
       body: revision.body,
     },
     inferredKind: card.semanticProfile?.inferredKind ?? card.kind,
@@ -106,6 +105,79 @@ async function attachAll(
   }
 }
 
+/** How many of a space's own captions are shown to the inference as its protocol. */
+const PROTOCOL_CAPTION_COUNT = 3;
+
+/**
+ * What a card needs for a feed row: its caption, how many attachments it
+ * has, and the first image among them - "تصویر" is the card's own face, so
+ * the list carries it rather than making every client fetch each card to
+ * find out whether there is one.
+ */
+export const CARD_LIST_INCLUDE = {
+  revisions: { orderBy: { revisionNumber: 'desc' as const }, take: 1 },
+  attachments: {
+    where: { kind: 'IMAGE' as const, status: 'READY' as const },
+    orderBy: { createdAt: 'asc' as const },
+    take: 1,
+    select: { objectKey: true },
+  },
+  _count: { select: { attachments: true, reactions: true } },
+};
+
+type CardListRowSource = Prisma.CardGetPayload<{ include: typeof CARD_LIST_INCLUDE }>;
+
+/**
+ * Fills in the engagement block for a whole page at once.
+ *
+ * Four extra queries for any page size rather than four per card: a feed of
+ * twenty cards asking twenty times whether the reader liked something is the
+ * kind of thing that only shows up under load, by which point it is in
+ * production.
+ */
+export async function toListRows(
+  prisma: PrismaClient,
+  rows: CardListRowSource[],
+  viewerId: string | null
+): Promise<CardListRow[]> {
+  const cardIds = rows.map((card) => card.id);
+  if (cardIds.length === 0) return [];
+
+  const [likeGroups, commentGroups, myLikes, myBookmarks] = await Promise.all([
+    prisma.cardReaction.groupBy({ by: ['cardId'], where: { cardId: { in: cardIds }, type: 'LIKE' }, _count: { _all: true } }),
+    prisma.cardComment.groupBy({ by: ['cardId'], where: { cardId: { in: cardIds }, status: 'VISIBLE' }, _count: { _all: true } }),
+    viewerId
+      ? prisma.cardReaction.findMany({
+          where: { cardId: { in: cardIds }, userId: viewerId, type: 'LIKE' },
+          select: { cardId: true },
+        })
+      : Promise.resolve([]),
+    viewerId
+      ? prisma.cardBookmark.findMany({ where: { cardId: { in: cardIds }, userId: viewerId }, select: { cardId: true } })
+      : Promise.resolve([]),
+  ]);
+
+  const likeCounts = new Map(likeGroups.map((row) => [row.cardId, row._count._all]));
+  const commentCounts = new Map(commentGroups.map((row) => [row.cardId, row._count._all]));
+  const liked = new Set(myLikes.map((row) => row.cardId));
+  const bookmarked = new Set(myBookmarks.map((row) => row.cardId));
+
+  return rows.map((card) => ({
+    id: card.id,
+    authorId: card.authorId,
+    kind: card.kind,
+    publishedAt: card.publishedAt,
+    body: card.revisions[0]?.body ?? '',
+    attachmentCount: card._count.attachments,
+    imageObjectKey: card.attachments[0]?.objectKey ?? null,
+    reactionCount: card._count.reactions,
+    likeCount: likeCounts.get(card.id) ?? 0,
+    commentCount: commentCounts.get(card.id) ?? 0,
+    likedByMe: liked.has(card.id),
+    bookmarkedByMe: bookmarked.has(card.id),
+  }));
+}
+
 export function createPrismaCardRepository(prisma: PrismaClient): CardRepository {
   return {
     async getSpaceStatus(spaceId) {
@@ -116,26 +188,43 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
     async getSpaceProtocol(spaceId) {
       const space = await prisma.space.findUnique({
         where: { id: spaceId },
-        select: {
-          definitionVersions: { orderBy: { versionNumber: 'desc' }, take: 1, select: { cardHints: true } },
-          participationRoles: { select: { title: true } },
-        },
+        select: { participationRoles: { select: { title: true } } },
       });
       if (!space) return null;
 
-      // `cardHints` is descriptive JSON on the definition, so it is read
-      // defensively rather than trusted to have a shape: a hint that does not
-      // look like one is dropped instead of reaching a prompt as `undefined`.
-      const raw = space.definitionVersions[0]?.cardHints;
-      const hints = Array.isArray(raw) ? raw : [];
-      const cardHints = hints.flatMap((hint) => {
-        if (typeof hint !== 'object' || hint === null) return [];
-        const { title, description } = hint as { title?: unknown; description?: unknown };
-        if (typeof title !== 'string' || title.length === 0) return [];
-        return [{ title, ...(typeof description === 'string' ? { description } : {}) }];
+      // What the space's own cards actually say, newest first - the three
+      // opening cards at minimum, since every space is created with them.
+      // Read from real cards rather than from templates on the definition:
+      // the protocol a draft should stay inside is the one people are
+      // already writing to.
+      const recent = await prisma.card.findMany({
+        where: { spaceId, status: 'ACTIVE' },
+        orderBy: { publishedAt: 'desc' },
+        take: PROTOCOL_CAPTION_COUNT,
+        select: { revisions: { orderBy: { revisionNumber: 'desc' }, take: 1, select: { body: true } } },
       });
+      const recentCaptions = recent
+        .map((card) => card.revisions[0]?.body.trim() ?? '')
+        .filter((caption) => caption.length > 0);
 
-      return { cardHints, roleTitles: space.participationRoles.map((role) => role.title) };
+      return { recentCaptions, roleTitles: space.participationRoles.map((role) => role.title) };
+    },
+
+    async getEngagement(cardId, viewerId) {
+      const [likeCount, commentCount, myLike, myBookmark] = await Promise.all([
+        prisma.cardReaction.count({ where: { cardId, type: 'LIKE' } }),
+        prisma.cardComment.count({ where: { cardId, status: 'VISIBLE' } }),
+        viewerId
+          ? prisma.cardReaction.findUnique({
+              where: { cardId_userId_type: { cardId, userId: viewerId, type: 'LIKE' } },
+              select: { id: true },
+            })
+          : null,
+        viewerId
+          ? prisma.cardBookmark.findUnique({ where: { cardId_userId: { cardId, userId: viewerId } }, select: { id: true } })
+          : null,
+      ]);
+      return { likeCount, commentCount, likedByMe: myLike !== null, bookmarkedByMe: myBookmark !== null };
     },
 
     async findAttachmentsByIds(ids) {
@@ -157,13 +246,7 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
         });
 
         await tx.cardRevision.create({
-          data: {
-            cardId: card.id,
-            revisionNumber: 1,
-            title: input.title,
-            body: input.body,
-            editorId: input.authorId,
-          },
+          data: { cardId: card.id, revisionNumber: 1, body: input.body, editorId: input.authorId },
         });
 
         await tx.cardSemanticProfile.create({
@@ -210,13 +293,7 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
         const revisionNumber = (latest?.revisionNumber ?? 0) + 1;
 
         await tx.cardRevision.create({
-          data: {
-            cardId: input.cardId,
-            revisionNumber,
-            title: input.title,
-            body: input.body,
-            editorId: input.editorId,
-          },
+          data: { cardId: input.cardId, revisionNumber, body: input.body, editorId: input.editorId },
         });
 
         await tx.card.update({ where: { id: input.cardId }, data: { kind: input.kind } });
@@ -255,7 +332,7 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
       return card && card.revisions.length > 0 ? toCardRecord(card) : null;
     },
 
-    async listCards(spaceId, { limit, before }) {
+    async listCards(spaceId, { limit, before, viewerId }) {
       const rows = await prisma.card.findMany({
         where: {
           spaceId,
@@ -271,25 +348,10 @@ export function createPrismaCardRepository(prisma: PrismaClient): CardRepository
         },
         orderBy: [{ publishedAt: 'desc' }, { id: 'desc' }],
         take: limit,
-        include: {
-          revisions: { orderBy: { revisionNumber: 'desc' }, take: 1 },
-          _count: { select: { attachments: true, reactions: true } },
-        },
+        include: CARD_LIST_INCLUDE,
       });
 
-      return rows.map<CardListRow>((card) => {
-        const revision = card.revisions[0]!;
-        return {
-          id: card.id,
-          authorId: card.authorId,
-          kind: card.kind,
-          publishedAt: card.publishedAt,
-          title: revision.title,
-          body: revision.body,
-          attachmentCount: card._count.attachments,
-          reactionCount: card._count.reactions,
-        };
-      });
+      return toListRows(prisma, rows, viewerId);
     },
 
     async getSpaceHealthStatus(spaceId) {

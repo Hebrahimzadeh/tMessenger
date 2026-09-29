@@ -28,8 +28,8 @@ describe('PinnedCards', () => {
     global.fetch = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         items: [
-          { cardId: CARD_2, position: 0, title: 'کارت دوم', pinnedAt: '2026-09-01T00:00:00.000Z' },
-          { cardId: CARD_1, position: 1, title: 'کارت اول', pinnedAt: '2026-09-02T00:00:00.000Z' },
+          { cardId: CARD_2, position: 0, caption: 'کارت دوم', pinnedAt: '2026-09-01T00:00:00.000Z' },
+          { cardId: CARD_1, position: 1, caption: 'کارت اول', pinnedAt: '2026-09-02T00:00:00.000Z' },
         ],
         limit: 5,
       })

@@ -10,15 +10,14 @@ import type { AiOrchestrator } from '../orchestrator';
 
 /** The space's own protocol, as far as a card draft is concerned. */
 export interface SpaceProtocol {
-  /** Example card templates the space's definition carries, if any. */
-  cardHints: { title: string; description?: string }[];
+  /** What the space's own recent cards say - real captions, not templates. */
+  recentCaptions: string[];
   /** The roles someone could be acting in when they post here. */
   roleTitles: string[];
 }
 
 export interface CardInferenceInput {
   body: string;
-  title?: string;
   protocol?: SpaceProtocol;
 }
 
@@ -164,10 +163,6 @@ function questionsFor(kind: CardKindContract): ClarifyingQuestion[] {
   }
 }
 
-function firstLine(text: string): string {
-  return text.trim().split('\n')[0]?.trim() ?? '';
-}
-
 /**
  * What the platform had to assume, said out loud.
  *
@@ -199,15 +194,12 @@ function assumptionsFor(classification: Classification, pattern: OperationalPatt
  * composer behaves identically in all four cases and in the ordinary one.
  */
 export function inferFromRules(input: CardInferenceInput): CardInference {
-  const classification = classify(`${input.title ?? ''}\n${input.body}`);
+  const classification = classify(input.body);
   const pattern = PATTERN_BY_KIND[classification.kind];
 
   return cardInferenceSchema.parse({
     kind: classification.kind,
     confidence: classification.confidence,
-    // The person's own first line, not an invented headline. A title they
-    // wrote is a better starting point than one that replaces their voice.
-    suggestedTitle: input.title?.trim() || firstLine(input.body).slice(0, 120) || 'کارت تازه',
     suggestedBody: input.body.trim(),
     assumptions: assumptionsFor(classification, pattern),
     creativityApplied: false,
@@ -216,13 +208,13 @@ export function inferFromRules(input: CardInferenceInput): CardInference {
   });
 }
 
-/** The space's own examples and roles, as context a draft can stay inside. */
+/** The space's own recent cards and roles, as context a draft can stay inside. */
 function protocolContext(protocol: SpaceProtocol | undefined): string {
   if (!protocol) return '';
-  const hints = protocol.cardHints.map((hint) => `- ${hint.title}${hint.description ? `: ${hint.description}` : ''}`);
+  const captions = protocol.recentCaptions.map((caption) => `- ${caption}`);
   const roles = protocol.roleTitles.length > 0 ? [`نقش‌های این بستر: ${protocol.roleTitles.join('، ')}`] : [];
-  if (hints.length === 0 && roles.length === 0) return '';
-  return ['\n\nنمونه‌های این بستر:', ...hints, ...roles].join('\n');
+  if (captions.length === 0 && roles.length === 0) return '';
+  return ['\n\nکارت‌های اخیر این بستر:', ...captions, ...roles].join('\n');
 }
 
 /**
@@ -230,7 +222,7 @@ function protocolContext(protocol: SpaceProtocol | undefined): string {
  *
  * The split is the same one Task 24 established and for the same reason: the
  * kind, the pattern, the questions and the assumptions all come from rules,
- * and the model is asked for nothing but a better title and a tidier body.
+ * and the model is asked for nothing but a tidier caption.
  * A model cannot make a card reservable, cannot make its close non-terminal,
  * and cannot invent a question outside the four topics - not because it is
  * told not to, but because there is no field in its output that would carry
@@ -246,7 +238,7 @@ export async function inferCard(deps: CardInferenceDeps, input: CardInferenceInp
       {
         capability: 'CARD_DRAFT',
         source: 'PUBLIC_USER_INPUT',
-        text: `${input.title ? `${input.title}\n` : ''}${input.body}${protocolContext(input.protocol)}`,
+        text: `${input.body}${protocolContext(input.protocol)}`,
         provenance: { kind: 'USER_TYPED' },
       },
       requesterId
@@ -255,7 +247,6 @@ export async function inferCard(deps: CardInferenceDeps, input: CardInferenceInp
     if (result.outcome === 'SUGGESTION' && result.output?.kind === 'CARD_DRAFT') {
       return cardInferenceSchema.parse({
         ...base,
-        suggestedTitle: result.output.title,
         suggestedBody: result.output.body,
         creativityApplied: true,
       });

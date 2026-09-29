@@ -101,20 +101,21 @@ export const participationRoleSuggestionSchema = z.object({
 });
 
 /**
- * A sample card, shown so someone can see what their space would actually
- * hold. `isExample` is a literal `true` and `notice` is a fixed string, both
- * fixed in the schema rather than left to a caller or a model: an example
- * that can be mistaken for real content is worse than no example at all, and
- * a flag anything could set to false is not a flag.
+ * A card the space could open with: a caption, and the first thing worth
+ * saying underneath it.
+ *
+ * This replaces the labelled sample card the guidance used to propose
+ * (owner, 2026-09-27). A card that announces itself as "not real content"
+ * teaches everyone who reads it that this is a place for pretend cards -
+ * "هنجارسازی بستر را دچار اخلال می‌کند" - so nothing here is a mock-up.
+ * What the guidance proposes is a draft the creator can publish as their
+ * own, under their own name, and both halves are plain text they can edit.
  */
-export const EXAMPLE_CARD_NOTICE = 'نمونه — محتوای واقعی نیست';
-
-export const exampleCardTemplateSchema = z.object({
-  title: z.string().min(1).max(200),
-  body: z.string().min(1).max(2000),
-  isExample: z.literal(true),
-  notice: z.literal(EXAMPLE_CARD_NOTICE),
+export const openingCardDraftSchema = z.object({
+  caption: z.string().min(1).max(2000),
+  comment: z.string().min(1).max(2000),
 });
+export type OpeningCardDraft = z.infer<typeof openingCardDraftSchema>;
 
 /**
  * Everything the guidance produces about one proposed space.
@@ -136,7 +137,7 @@ export const spaceCreationGuidanceSchema = z.object({
   suggestedRevisions: z.array(suggestedRevisionSchema).max(10),
   participationRoles: z.array(participationRoleSuggestionSchema).max(8),
   valueChainNodes: z.array(z.string().min(1).max(200)).max(12),
-  exampleCardTemplates: z.array(exampleCardTemplateSchema).max(6),
+  openingCardDrafts: z.array(openingCardDraftSchema).max(6),
   suggestedToolKeys: z.array(z.string().min(1).max(60)).max(10),
   creationDecision: creationDecisionSchema,
   /** The policy rules that actually matched. A BLOCK with an empty list is impossible by construction. */
@@ -158,10 +159,25 @@ export const spaceBuildRoleSchema = z.object({
   isPrimary: z.boolean(),
 });
 
-export const spaceBuildCardHintSchema = z.object({
-  title: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(1000).default(''),
+/**
+ * One of the three cards a new space opens with.
+ *
+ * `caption` is the card itself, written as the creator's own first
+ * contribution - never a template, never a placeholder, and never labelled
+ * as an example. `comment` is the first thing said underneath it, so the
+ * conversation a space is for has visibly already started.
+ *
+ * Both are ordinary text and both become real rows the creator owns and can
+ * edit or delete like anything else they wrote.
+ */
+export const spaceOpeningCardSchema = z.object({
+  caption: z.string().trim().min(1).max(2000),
+  comment: z.string().trim().min(1).max(2000),
 });
+export type SpaceOpeningCard = z.infer<typeof spaceOpeningCardSchema>;
+
+/** Every new space opens with exactly this many cards. */
+export const SPACE_OPENING_CARD_COUNT = 3;
 
 /**
  * A whole space, from one prompt.
@@ -174,7 +190,9 @@ export const spaceBuildCardHintSchema = z.object({
  *
  * "Exactly two primary roles" is enforced here rather than trusted, because
  * it is what publishing requires and a model saying so is not the same as it
- * being so.
+ * being so. `openingCards` is exactly three for the same reason: a space
+ * that opens empty gets filled by whoever guesses first, and three real
+ * cards with a comment under each are what set the tone instead.
  *
  * `reviewNote` is the model's only lever on the outcome, and it only points
  * one way: filling it holds a space back for a person to look at. It cannot
@@ -188,7 +206,7 @@ export const spaceBuildOutputSchema = z
     audience: z.string().trim().max(300).default(''),
     participationMethods: z.array(z.string().trim().min(1).max(100)).min(1).max(5),
     roles: z.array(spaceBuildRoleSchema).min(2).max(6),
-    cardHints: z.array(spaceBuildCardHintSchema).max(3).default([]),
+    openingCards: z.array(spaceOpeningCardSchema).length(SPACE_OPENING_CARD_COUNT),
     reviewNote: z.string().trim().max(300).default(''),
   })
   .refine((space) => space.roles.filter((role) => role.isPrimary).length === 2, {
@@ -223,7 +241,7 @@ export type BuildSpaceResponse = z.infer<typeof buildSpaceResponseSchema>;
 
 export const cardDraftOutputSchema = z.object({
   kind: z.literal('CARD_DRAFT'),
-  title: z.string().min(1).max(200),
+  /** The caption, which is all the text a card has. */
   body: z.string().min(1).max(4000),
 });
 

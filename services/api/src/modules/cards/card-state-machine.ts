@@ -23,25 +23,6 @@ export function isTerminalAttachmentStatus(status: CardAttachmentStatus): boolea
   return status === 'READY' || status === 'REJECTED';
 }
 
-const TITLE_MAX_LENGTH = 80;
-const EMPTY_TITLE_FALLBACK = 'کارت بدون عنوان';
-
-/**
- * A card's title is derived from its body when the author doesn't supply
- * one - "derivation عنوان" - so an attachment-only card (no body at all)
- * still has something to show in a list. Never fails, never returns an
- * empty string.
- */
-export function deriveTitle(explicitTitle: string | undefined, body: string): string {
-  const trimmedTitle = explicitTitle?.trim();
-  if (trimmedTitle && trimmedTitle.length > 0) return trimmedTitle;
-
-  const firstLine = body.split('\n')[0]?.trim() ?? '';
-  if (firstLine.length === 0) return EMPTY_TITLE_FALLBACK;
-
-  return firstLine.length > TITLE_MAX_LENGTH ? firstLine.slice(0, TITLE_MAX_LENGTH).trimEnd() : firstLine;
-}
-
 /**
  * The reservation lifecycle - "مرحلهٔ accept را حذف کن؛ reserve موفق فوراً
  * RESERVED است". ACTIVE has no stored row (a card with no CardReservation

@@ -86,6 +86,7 @@ model User {
   cardCommentsAuthored            CardComment[]            @relation("CardCommentAuthor")
   cardCommentRevisionsEdited      CardCommentRevision[]    @relation("CardCommentRevisionEditor")
   cardReactions                   CardReaction[]           @relation("CardReactionUser")
+  cardBookmarks                   CardBookmark[]           @relation("CardBookmarkUser")
   cardPinsCreated                 CardPin[]                @relation("CardPinnedBy")
   cardReservationsOwned           CardReservation[]        @relation("CardReservationOwner")
   cardReservationsMade            CardReservation[]        @relation("CardReservationReserver")
@@ -408,7 +409,7 @@ model Space {
 /// One immutable snapshot of a space's definition - every edit inserts a
 /// new row (versionNumber + 1) rather than mutating an existing one, per
 /// this task's own "هر edit یک version immutable" requirement.
-/// `participationMethods`/`cardHints`/`primaryRoleIds`/`supplementaryRoleIds`
+/// `participationMethods`/`primaryRoleIds`/`supplementaryRoleIds`
 /// are JSON snapshots of string arrays: snapshotting the *ids* in use at
 /// this version (rather than joining live SpaceParticipationRole rows)
 /// means a version's own content never silently changes even if a role's
@@ -426,7 +427,6 @@ model SpaceDefinitionVersion {
   purpose              String
   audience             String?
   participationMethods Json
-  cardHints            Json?
   primaryRoleIds       Json
   supplementaryRoleIds Json
   policyVersion        Int
@@ -626,6 +626,7 @@ model Card {
   events          CardEvent[]
   comments        CardComment[]
   reactions       CardReaction[]
+  bookmarks       CardBookmark[]
   pin             CardPin?
   reservation     CardReservation?
 
@@ -633,14 +634,14 @@ model Card {
   @@map("cards")
 }
 
-/// One immutable snapshot of a card's text - every edit inserts a new row.
-/// `title` is derived from `body` when the author does not supply one (see
-/// cards/card.service.ts's deriveTitle).
+/// One immutable snapshot of a card's caption - every edit inserts a new row.
+/// There is no title: a card is an image and a caption, and `body` is that
+/// caption (owner decision 2026-09-27, see docs/decisions). It can be empty,
+/// because a card carrying only an image is a whole card.
 model CardRevision {
   id             String   @id @default(uuid()) @db.Uuid
   cardId         String   @db.Uuid
   revisionNumber Int
-  title          String
   body           String
   editorId       String   @db.Uuid
   createdAt      DateTime @default(now()) @db.Timestamptz(6)
@@ -772,6 +773,8 @@ model CardCommentRevision {
 }
 
 enum CardReactionType {
+  /// The one a card shows: "پسند", beside its comment, share and bookmark.
+  LIKE
   SUPPORT
   USEFUL
   INTERESTED
@@ -796,6 +799,28 @@ model CardReaction {
   @@unique([cardId, userId, type])
   @@index([cardId])
   @@map("card_reactions")
+}
+
+/// A private "keep this" - نشان‌کردن یک کارت.
+///
+/// Deliberately not a reaction: `CardReaction` is a weak *public* discovery
+/// signal, and a bookmark is neither public nor a signal. Nobody but the
+/// person who made it can see it, no count of it is ever exposed, and it
+/// feeds no ranking - it is a way back to a card, nothing more. The
+/// `@@unique` makes bookmarking idempotent, so a repeat un-bookmarks
+/// instead of stacking rows.
+model CardBookmark {
+  id        String   @id @default(uuid()) @db.Uuid
+  cardId    String   @db.Uuid
+  userId    String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  user User @relation("CardBookmarkUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([cardId, userId])
+  @@index([userId, createdAt])
+  @@map("card_bookmarks")
 }
 
 /// A creator/space-admin pin - "pin/unpin فقط creator/space-admin و دارای

@@ -3,7 +3,6 @@ import type { ReservationState } from '@taavon/database';
 import {
   canTransitionAttachment,
   canTransitionReservation,
-  deriveTitle,
   isTerminalAttachmentStatus,
   isTerminalReservationState,
 } from './card-state-machine';
@@ -46,31 +45,6 @@ describe('isTerminalAttachmentStatus', () => {
     expect(isTerminalAttachmentStatus('REJECTED')).toBe(true);
     expect(isTerminalAttachmentStatus('PENDING')).toBe(false);
     expect(isTerminalAttachmentStatus('PROCESSING')).toBe(false);
-  });
-});
-
-describe('deriveTitle', () => {
-  it('uses an explicit title verbatim when given', () => {
-    expect(deriveTitle('کمک به آبیاری باغچه', 'a long body of text here')).toBe('کمک به آبیاری باغچه');
-  });
-
-  it('derives from the first line of the body when no title is given', () => {
-    expect(deriveTitle(undefined, 'خط اول\nخط دوم و توضیحات بیشتر')).toBe('خط اول');
-  });
-
-  it('truncates a long first line to a sensible length', () => {
-    const longLine = 'الف '.repeat(80).trim();
-    const title = deriveTitle(undefined, longLine);
-    expect(title.length).toBeLessThanOrEqual(80);
-  });
-
-  it('falls back to a fixed placeholder when there is no body and no title (attachment-only card)', () => {
-    expect(deriveTitle(undefined, '')).toBe('کارت بدون عنوان');
-    expect(deriveTitle('   ', '   ')).toBe('کارت بدون عنوان');
-  });
-
-  it('trims surrounding whitespace on the derived line', () => {
-    expect(deriveTitle(undefined, '   عنوان با فاصله   \nبدنه')).toBe('عنوان با فاصله');
   });
 });
 

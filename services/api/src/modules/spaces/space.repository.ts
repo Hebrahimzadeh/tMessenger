@@ -1,8 +1,7 @@
 import type { Prisma, PrismaClient } from '@taavon/database';
-import type { SpaceCardHint } from '@taavon/contracts';
 import { logAwarenessEvent } from '../../lib/awareness-events';
 import { normalizePersianLetters } from '../../lib/persian-text';
-import type { MySpaceRecord, SpaceRecord, SpaceRepository, SpaceRoleInputRecord } from './space.service';
+import type { MySpaceRecord, OpeningCardInput, SpaceRecord, SpaceRepository, SpaceRoleInputRecord } from './space.service';
 
 /** Denormalized search column - see schema.prisma's Space.searchText comment. Same normalization as slug.ts/space-similarity.service.ts, so a query normalized the same way actually matches. */
 function buildSearchText(title: string, purpose: string, audience: string | undefined): string {
@@ -35,7 +34,6 @@ function toRecord(space: SpaceWithLatestVersion): SpaceRecord {
       purpose: version.purpose,
       audience: version.audience,
       participationMethods: version.participationMethods as string[],
-      cardHints: version.cardHints as SpaceCardHint[] | null,
       policyVersion: version.policyVersion,
       gateVerdict: version.gateVerdict,
       gateReason: version.gateReason,
@@ -72,6 +70,111 @@ async function upsertRoles(
   }
 
   return { primaryRoleIds, supplementaryRoleIds };
+}
+
+/**
+ * The three cards a space opens with, and the first comment under each.
+ *
+ * Real rows, in the same transaction as the space itself: a space either
+ * exists as a conversation already started, or it does not exist. Their
+ * author and their commenter are the creator - the one real person involved -
+ * because "هویت جعلی" is the line this must not cross ("کارت آغازین ساختگی
+ * یا هویت جعلی ممنوع است", §4.1's rule 32). What the 2026-09-27 decision
+ * changes is only the *labelling*: these are the creator's own opening cards,
+ * theirs to edit or delete, and not badged as samples.
+ *
+ * Everything an ordinary card writes is written here too - the revision, the
+ * semantic profile, the card event, the outbox event and the awareness event -
+ * because these are ordinary cards. An opening card that skipped half of that
+ * would be a second kind of card nobody could reason about.
+ *
+ * `publishedAt` is set explicitly, a second apart and counting *down* the
+ * list, rather than left to default. Postgres freezes `now()` for a whole
+ * transaction, so three cards written here would otherwise share one instant
+ * and the feed - which orders by `(publishedAt, id)` descending - would fall
+ * back to comparing random uuids. That would shuffle the three on every
+ * space. Counting down means the first card in the list is the newest, so a
+ * visitor reads them in the order they were written: what this space is for,
+ * then the two questions.
+ */
+async function createOpeningCards(
+  tx: Prisma.TransactionClient,
+  input: { spaceId: string; creatorId: string; cards: OpeningCardInput[] }
+): Promise<void> {
+  const firstPublishedAt = Date.now();
+
+  for (const [index, opening] of input.cards.entries()) {
+    const card = await tx.card.create({
+      data: {
+        spaceId: input.spaceId,
+        authorId: input.creatorId,
+        kind: opening.kind,
+        status: 'ACTIVE',
+        publishedAt: new Date(firstPublishedAt - index * 1000),
+      },
+      select: { id: true },
+    });
+    await tx.cardRevision.create({
+      data: { cardId: card.id, revisionNumber: 1, body: opening.caption, editorId: input.creatorId },
+    });
+    await tx.cardSemanticProfile.create({
+      data: { cardId: card.id, inferredKind: opening.inferredKind, confidence: opening.confidence },
+    });
+    await tx.cardEvent.create({
+      data: {
+        cardId: card.id,
+        eventType: 'card.created',
+        actorId: input.creatorId,
+        payload: { kind: opening.kind, revisionNumber: 1, openingCard: index + 1 },
+      },
+    });
+    await tx.outboxEvent.create({
+      data: {
+        aggregateType: 'Card',
+        aggregateId: card.id,
+        eventType: 'card.created',
+        payload: { cardId: card.id, spaceId: input.spaceId, authorId: input.creatorId },
+      },
+    });
+    await logAwarenessEvent(tx, {
+      type: 'PRODUCED',
+      actorId: input.creatorId,
+      subjectId: card.id,
+      deepLink: `/cards/${card.id}`,
+      idempotencyKey: `card:${card.id}:PRODUCED`,
+    });
+
+    const comment = await tx.cardComment.create({
+      data: { cardId: card.id, authorId: input.creatorId },
+      select: { id: true },
+    });
+    await tx.cardCommentRevision.create({
+      data: { commentId: comment.id, revisionNumber: 1, body: opening.comment, editorId: input.creatorId },
+    });
+    await tx.cardEvent.create({
+      data: {
+        cardId: card.id,
+        eventType: 'card.comment_created',
+        actorId: input.creatorId,
+        payload: { commentId: comment.id, parentId: null },
+      },
+    });
+    await tx.outboxEvent.create({
+      data: {
+        aggregateType: 'Card',
+        aggregateId: card.id,
+        eventType: 'card.comment_created',
+        payload: { cardId: card.id, commentId: comment.id, authorId: input.creatorId },
+      },
+    });
+    await logAwarenessEvent(tx, {
+      type: 'PUBLIC_CONTRIBUTION',
+      actorId: input.creatorId,
+      subjectId: card.id,
+      deepLink: `/cards/${card.id}`,
+      idempotencyKey: `comment:${comment.id}:PUBLIC_CONTRIBUTION`,
+    });
+  }
 }
 
 export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceRepository {
@@ -166,7 +269,7 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
       return assignment !== null;
     },
 
-    async createNewVersion({ spaceId, title, purpose, audience, participationMethods, cardHints, roles, policyVersion, createdBy }) {
+    async createNewVersion({ spaceId, title, purpose, audience, participationMethods, roles, policyVersion, createdBy }) {
       return prisma.$transaction(async (tx) => {
         const { primaryRoleIds, supplementaryRoleIds } = await upsertRoles(tx, spaceId, roles);
 
@@ -185,7 +288,6 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
             purpose,
             audience,
             participationMethods,
-            cardHints: cardHints ?? undefined,
             primaryRoleIds,
             supplementaryRoleIds,
             policyVersion,
@@ -227,7 +329,6 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
             purpose: input.purpose,
             audience: input.audience,
             participationMethods: input.participationMethods,
-            cardHints: input.cardHints,
             primaryRoleIds,
             supplementaryRoleIds,
             policyVersion: input.policyVersion,
@@ -236,6 +337,7 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
             gateReason: input.reason,
           },
         });
+        await createOpeningCards(tx, { spaceId: space.id, creatorId: input.creatorId, cards: input.openingCards });
         await tx.outboxEvent.create({
           data: {
             aggregateType: 'Space',
@@ -290,7 +392,6 @@ export function createPrismaSpaceRepository(prisma: PrismaClient): SpaceReposito
             purpose: input.purpose,
             audience: input.audience,
             participationMethods: input.participationMethods,
-            cardHints: input.cardHints ?? undefined,
             primaryRoleIds,
             supplementaryRoleIds,
             policyVersion: input.policyVersion,

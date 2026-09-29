@@ -26,15 +26,15 @@ interface FakeCard {
   kind: CardRecord['kind'];
   status: CardRecord['status'];
   publishedAt: Date;
-  revisions: { revisionNumber: number; title: string; body: string }[];
+  revisions: { revisionNumber: number; body: string }[];
   inferredKind: CardRecord['kind'];
 }
 
 function fakeCardRepo(opts: { spaceStatus?: SpaceStatus } = {}) {
   const spaceStatus: SpaceStatus = opts.spaceStatus ?? 'PUBLISHED';
-  /** The space's own examples and roles, as the inference would see them. */
+  /** The space's own recent cards and roles, as the inference would see them. */
   const spaceProtocol = {
-    cardHints: [{ title: 'نمونه: اعلام آمادگی', description: 'من می‌توانم کمک کنم.' }],
+    recentCaptions: ['من می‌توانم آخر هفته‌ها کمک کنم.'],
     roleTitles: ['هماهنگ‌کننده', 'مشارکت‌کننده'],
   };
 
@@ -96,7 +96,7 @@ function fakeCardRepo(opts: { spaceStatus?: SpaceStatus } = {}) {
         kind: input.kind,
         status: 'ACTIVE',
         publishedAt: new Date((clock += 1000)),
-        revisions: [{ revisionNumber: 1, title: input.title, body: input.body }],
+        revisions: [{ revisionNumber: 1, body: input.body }],
         inferredKind: input.inferredKind,
       });
       for (const attachmentId of input.fileAttachmentIds) {
@@ -123,7 +123,7 @@ function fakeCardRepo(opts: { spaceStatus?: SpaceStatus } = {}) {
     async addRevision(input) {
       const card = cards.get(input.cardId)!;
       const revisionNumber = card.revisions.length + 1;
-      card.revisions.push({ revisionNumber, title: input.title, body: input.body });
+      card.revisions.push({ revisionNumber, body: input.body });
       card.kind = input.kind;
       card.inferredKind = input.inferredKind;
       for (const attachmentId of input.fileAttachmentIds) attachments.get(attachmentId)!.cardId = card.id;
@@ -132,6 +132,9 @@ function fakeCardRepo(opts: { spaceStatus?: SpaceStatus } = {}) {
     async findCard(cardId) {
       const card = cards.get(cardId);
       return card ? assemble(card) : null;
+    },
+    async getEngagement() {
+      return { likeCount: 0, commentCount: 0, likedByMe: false, bookmarkedByMe: false };
     },
     async listCards(spaceId, { limit, before }) {
       let rows = [...cards.values()]
@@ -151,10 +154,14 @@ function fakeCardRepo(opts: { spaceStatus?: SpaceStatus } = {}) {
           authorId: c.authorId,
           kind: c.kind,
           publishedAt: c.publishedAt,
-          title: revision.title,
           body: revision.body,
           attachmentCount: [...attachments.values()].filter((a) => a.cardId === c.id).length,
+          imageObjectKey: [...attachments.values()].find((a) => a.cardId === c.id && a.kind === 'IMAGE')?.objectKey ?? null,
           reactionCount: 0,
+          likeCount: 0,
+          commentCount: 0,
+          likedByMe: false,
+          bookmarkedByMe: false,
         };
       });
     },
@@ -196,7 +203,9 @@ describe('createCard', () => {
     });
     const card = await repo.findCard(id);
     expect(card?.attachments).toHaveLength(1);
-    expect(card?.latestRevision.title).toBe('کارت بدون عنوان');
+    // An image with nothing written under it: the caption stays empty rather
+    // than a name being invented for it.
+    expect(card?.latestRevision.body).toBe('');
   });
 
   it('creates a card from a link alone (stored verbatim, no server-side fetch)', async () => {
@@ -213,7 +222,7 @@ describe('createCard', () => {
     expect(card?.attachments[0]).toMatchObject({ kind: 'LINK', linkUrl: 'https://example.org/doc' });
   });
 
-  it('derives the title from the first line of the body when none is given', async () => {
+  it('stores the caption exactly as written, deriving no name from it', async () => {
     const { repo } = fakeCardRepo();
     const { id } = await createCard(repo, {
       spaceId: SPACE,
@@ -223,7 +232,9 @@ describe('createCard', () => {
       links: [],
       locations: [],
     });
-    expect((await repo.findCard(id))?.latestRevision.title).toBe('جمع‌آوری کمک‌های نقدی');
+    const card = await repo.findCard(id);
+    expect(card?.latestRevision.body).toBe('جمع‌آوری کمک‌های نقدی\nجزئیات در ادامه...');
+    expect(card?.latestRevision).not.toHaveProperty('title');
   });
 
   it('rejects a card with no body and no attachment', async () => {

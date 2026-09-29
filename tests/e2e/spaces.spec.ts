@@ -60,6 +60,36 @@ test('a vague prompt still becomes a complete space rather than a form', async (
   expect(await page.getByText('اصلی').count()).toBe(2);
 });
 
+test('a new space opens with three real cards, each already carrying a comment', async ({ page, context }) => {
+  await loginViaDevOtp(page, '/');
+  const spaceUrl = await buildSpaceFromPrompt(page, `${LENDING_PROMPT} - آغازین ${Math.floor(Math.random() * 1_000_000)}`);
+
+  await page.goto(spaceUrl);
+  const cardLinks = page.locator('a[href^="/cards/"]');
+  await expect(cardLinks).toHaveCount(3);
+
+  // "ننویسیم محتوای نمونه غیر واقعی" - no card announces itself as an
+  // example, because none of them is one (owner, 2026-09-27).
+  await expect(page.getByText(/محتوای واقعی نیست/)).toHaveCount(0);
+  await expect(page.getByText(/^نمونه$/)).toHaveCount(0);
+
+  // Each one is a real card: the four actions, and a comment already under it.
+  for (const label of ['پسند', 'گفت‌وگو', 'هم‌رسانی', 'نشان‌کردن']) {
+    expect(await page.getByRole('button', { name: label }).count()).toBe(3);
+  }
+
+  await cardLinks.first().click();
+  await page.waitForURL((url) => /^\/cards\//.test(url.pathname));
+  await expect(page.getByRole('heading', { name: 'گفت‌وگوی عمومی' })).toBeVisible();
+  // One comment, written by the space's creator when the space was made.
+  await expect(page.locator('li').filter({ hasText: /همین زیر|بنویسید/ }).first()).toBeVisible();
+
+  // And they are public, like any other card in a published space.
+  const anonPage = await (await context.browser()!.newContext()).newPage();
+  await anonPage.goto(spaceUrl);
+  await expect(anonPage.locator('a[href^="/cards/"]')).toHaveCount(3);
+});
+
 test('the composer asks for nothing but the prompt', async ({ page }) => {
   await loginViaDevOtp(page, '/spaces/new');
 

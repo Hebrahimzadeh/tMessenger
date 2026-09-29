@@ -36,7 +36,8 @@ export class PinLimitReachedError extends Error {
 export interface PinnedCardRecord {
   cardId: string;
   position: number;
-  title: string;
+  /** The pinned card's caption - a card has no title. */
+  caption: string;
   pinnedAt: Date;
 }
 
@@ -53,7 +54,7 @@ export interface PinRepository {
 }
 
 export interface PinListResult {
-  items: Array<{ cardId: string; position: number; title: string; pinnedAt: string }>;
+  items: Array<{ cardId: string; position: number; caption: string; pinnedAt: string }>;
   limit: number;
 }
 
@@ -62,7 +63,7 @@ function toResult(records: PinnedCardRecord[]): PinListResult {
     items: records
       .slice()
       .sort((a, b) => a.position - b.position)
-      .map((r) => ({ cardId: r.cardId, position: r.position, title: r.title, pinnedAt: r.pinnedAt.toISOString() })),
+      .map((r) => ({ cardId: r.cardId, position: r.position, caption: r.caption, pinnedAt: r.pinnedAt.toISOString() })),
     limit: MAX_PINS_PER_SPACE,
   };
 }

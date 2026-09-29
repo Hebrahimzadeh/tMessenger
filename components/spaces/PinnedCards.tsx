@@ -55,7 +55,7 @@ export function PinnedCards({ spaceId }: PinnedCardsProps) {
           <Pin size={20} className="shrink-0 text-[#527DA3]" aria-hidden />
           <div className="min-w-0 flex-1 border-r-2 border-[#527DA3] pr-2.5">
             <div className="mb-0.5 text-[11px] font-bold text-[#527DA3]">کارت سنجاق‌شده</div>
-            <div className="truncate text-[12px] text-gray-600">{pin.title}</div>
+            <div className="truncate text-[12px] text-gray-600">{pin.caption || 'کارت بدون متن'}</div>
           </div>
         </Link>
       ))}

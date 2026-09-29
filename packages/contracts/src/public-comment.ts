@@ -41,7 +41,13 @@ export const commentListResponseSchema = z.object({
 });
 export type CommentListResponse = z.infer<typeof commentListResponseSchema>;
 
-export const cardReactionTypeSchema = z.enum(['SUPPORT', 'USEFUL', 'INTERESTED', 'CELEBRATE']);
+/**
+ * `LIKE` is the one a card actually shows - "پسند" under the caption, next
+ * to the comment, share and bookmark. The other four predate it and stay
+ * valid: nothing is migrated away, they simply have no button of their own
+ * any more.
+ */
+export const cardReactionTypeSchema = z.enum(['LIKE', 'SUPPORT', 'USEFUL', 'INTERESTED', 'CELEBRATE']);
 export type CardReactionType = z.infer<typeof cardReactionTypeSchema>;
 
 export const toggleReactionBodySchema = z.object({
@@ -50,6 +56,7 @@ export const toggleReactionBodySchema = z.object({
 export type ToggleReactionBody = z.infer<typeof toggleReactionBodySchema>;
 
 export const reactionCountsSchema = z.object({
+  LIKE: z.number().int().nonnegative(),
   SUPPORT: z.number().int().nonnegative(),
   USEFUL: z.number().int().nonnegative(),
   INTERESTED: z.number().int().nonnegative(),
@@ -68,7 +75,8 @@ export type ReactionSummary = z.infer<typeof reactionSummarySchema>;
 export const pinnedCardSchema = z.object({
   cardId: z.string().uuid(),
   position: z.number().int().nonnegative(),
-  title: z.string(),
+  /** The card's caption - a card has no title, so a pin strip shows the opening of what was written. */
+  caption: z.string(),
   pinnedAt: z.string().datetime(),
 });
 export type PinnedCard = z.infer<typeof pinnedCardSchema>;

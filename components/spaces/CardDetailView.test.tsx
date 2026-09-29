@@ -21,8 +21,9 @@ function cardResponse() {
     kind: 'AWARENESS',
     status: 'ACTIVE',
     publishedAt: '2026-09-10T00:00:00.000Z',
-    revision: { revisionNumber: 1, title: 'یک کارت', body: 'متن کارت' },
+    revision: { revisionNumber: 1, body: 'متن کارت' },
     inferredKind: 'AWARENESS',
+    engagement: { likeCount: 0, commentCount: 0, likedByMe: false, bookmarkedByMe: false },
     attachments: [],
   };
 }
@@ -90,7 +91,7 @@ describe('CardDetailView: MEANINGFUL_VIEW tracking', () => {
     }) as unknown as typeof fetch;
 
     render(<CardDetailView cardId={CARD_ID} />);
-    await screen.findByText('یک کارت');
+    await screen.findByText('متن کارت');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(viewCalls).toHaveLength(0);
   });

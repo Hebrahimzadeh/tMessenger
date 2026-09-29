@@ -78,7 +78,6 @@ export function SpaceEditForm({ space, onSaved, onCancel }: SpaceEditFormProps) 
             ...(audience.trim() ? { audience: audience.trim() } : {}),
             participationMethods: splitMethods(methods),
             // Sample cards are not edited here; they are sent back as they are.
-            ...(definition.cardHints ? { cardHints: definition.cardHints } : {}),
             roles: roles
               .filter((role) => role.title.trim().length > 0)
               .map((role) => ({

@@ -1,10 +1,12 @@
 import type { PrismaClient } from '@taavon/database';
 import type { CardReactionType } from '@taavon/contracts';
 import type { ReactionRepository, ReactionSummary } from './reaction.service';
+import type { BookmarkRepository } from './bookmark.service';
 import type { PinnedCardRecord, PinRepository } from './pin.service';
+import { CARD_LIST_INCLUDE, toListRows } from './card.repository';
 import { isSpaceEditor } from './public-comment.repository';
 
-const EMPTY_COUNTS = { SUPPORT: 0, USEFUL: 0, INTERESTED: 0, CELEBRATE: 0 };
+const EMPTY_COUNTS = { LIKE: 0, SUPPORT: 0, USEFUL: 0, INTERESTED: 0, CELEBRATE: 0 };
 
 export function createPrismaReactionRepository(prisma: PrismaClient): ReactionRepository {
   return {
@@ -43,6 +45,79 @@ export function createPrismaReactionRepository(prisma: PrismaClient): ReactionRe
         : [];
 
       return { counts, mine };
+    },
+  };
+}
+
+/**
+ * The bookmark table, which nobody but its owner ever reads.
+ *
+ * `listByUser` pages by the *bookmark's* own (createdAt, id), not the card's:
+ * saving an old card puts it at the top of your shelf, which is what saving
+ * it meant. Cards whose space stopped being public, or that were archived or
+ * removed, drop out of the list while the bookmark row stays - nothing is
+ * deleted behind the person's back, and a card that comes back is on their
+ * shelf again.
+ */
+export function createPrismaBookmarkRepository(prisma: PrismaClient): BookmarkRepository {
+  return {
+    async getCardContext(cardId) {
+      const card = await prisma.card.findUnique({
+        where: { id: cardId },
+        select: { status: true, space: { select: { status: true } } },
+      });
+      return card ? { cardStatus: card.status, spaceStatus: card.space.status } : null;
+    },
+
+    async toggle(cardId, userId) {
+      return prisma.$transaction(async (tx) => {
+        const existing = await tx.cardBookmark.findUnique({
+          where: { cardId_userId: { cardId, userId } },
+          select: { id: true },
+        });
+        if (existing) {
+          await tx.cardBookmark.delete({ where: { id: existing.id } });
+          return 'removed';
+        }
+        await tx.cardBookmark.create({ data: { cardId, userId } });
+        return 'added';
+      });
+    },
+
+    async isBookmarked(cardId, userId) {
+      const found = await prisma.cardBookmark.findUnique({
+        where: { cardId_userId: { cardId, userId } },
+        select: { id: true },
+      });
+      return found !== null;
+    },
+
+    async listByUser(userId, { limit, before }) {
+      const bookmarks = await prisma.cardBookmark.findMany({
+        where: {
+          userId,
+          card: { status: 'ACTIVE', space: { status: 'PUBLISHED' } },
+          ...(before
+            ? {
+                OR: [
+                  { createdAt: { lt: new Date(before.createdAt) } },
+                  { createdAt: new Date(before.createdAt), id: { lt: before.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit,
+        include: { card: { include: CARD_LIST_INCLUDE } },
+      });
+
+      const rows = await toListRows(
+        prisma,
+        bookmarks.map((bookmark) => bookmark.card),
+        userId
+      );
+      const last = bookmarks[bookmarks.length - 1];
+      return { rows, lastBookmark: last ? { createdAt: last.createdAt, id: last.id } : null };
     },
   };
 }
@@ -113,7 +188,7 @@ export function createPrismaPinRepository(prisma: PrismaClient): PinRepository {
       return pins.map((pin) => ({
         cardId: pin.cardId,
         position: pin.position,
-        title: pin.card.revisions[0]?.title ?? '',
+        caption: pin.card.revisions[0]?.body ?? '',
         pinnedAt: pin.createdAt,
       }));
     },

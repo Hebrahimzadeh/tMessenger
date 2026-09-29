@@ -15,7 +15,6 @@ import { inferCard } from '../ai/capabilities/card-inference';
 import { AiOrchestrator } from '../ai/orchestrator';
 import { noopOrchestratorRepository } from '../ai/capabilities/policy.fixtures';
 import { inferCardKind } from './card-kind-inference';
-import { deriveTitle } from './card-state-machine';
 
 const SESSION_HMAC_KEY = 'test-only-session-hmac-key';
 const USER_1 = '11111111-1111-4111-8111-111111111111';
@@ -26,12 +25,12 @@ const MP3 = Buffer.from('ID3\x03\x00\x00\x00');
 function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
   /** The space's own examples and roles, as the inference would see them. */
   const spaceProtocol = {
-    cardHints: [{ title: 'نمونه: اعلام آمادگی', description: 'من می‌توانم کمک کنم.' }],
+    recentCaptions: ['من می‌توانم آخر هفته‌ها کمک کنم.'],
     roleTitles: ['هماهنگ‌کننده', 'مشارکت‌کننده'],
   };
 
   const SPACE = randomUUID();
-  const cards = new Map<string, { record: CardRecord; revisions: { revisionNumber: number; title: string; body: string }[] }>();
+  const cards = new Map<string, { record: CardRecord; revisions: { revisionNumber: number; body: string }[] }>();
   const attachments = new Map<
     string,
     Omit<AttachmentRecord, 'kind'> & {
@@ -94,7 +93,7 @@ function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
     async createCard(input) {
       const id = randomUUID();
       cards.set(id, {
-        revisions: [{ revisionNumber: 1, title: input.title, body: input.body }],
+        revisions: [{ revisionNumber: 1, body: input.body }],
         record: {
           id,
           spaceId: input.spaceId,
@@ -102,7 +101,7 @@ function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
           kind: input.kind,
           status: 'ACTIVE',
           publishedAt: new Date((clock += 1000)),
-          latestRevision: { revisionNumber: 1, title: input.title, body: input.body },
+          latestRevision: { revisionNumber: 1, body: input.body },
           inferredKind: input.inferredKind,
           attachments: [],
         },
@@ -129,8 +128,8 @@ function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
     async addRevision(input) {
       const card = cards.get(input.cardId)!;
       const revisionNumber = card.revisions.length + 1;
-      card.revisions.push({ revisionNumber, title: input.title, body: input.body });
-      card.record.latestRevision = { revisionNumber, title: input.title, body: input.body };
+      card.revisions.push({ revisionNumber, body: input.body });
+      card.record.latestRevision = { revisionNumber, body: input.body };
       card.record.kind = input.kind;
       card.record.inferredKind = input.inferredKind;
       for (const attachmentId of input.fileAttachmentIds) attachments.get(attachmentId)!.cardId = input.cardId;
@@ -140,6 +139,9 @@ function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
       const card = cards.get(cardId);
       if (!card) return null;
       return { ...card.record, attachments: attachmentRecordsFor(cardId) };
+    },
+    async getEngagement() {
+      return { likeCount: 0, commentCount: 0, likedByMe: false, bookmarkedByMe: false };
     },
     async listCards(spaceId, { limit, before }) {
       let rows = [...cards.values()]
@@ -158,10 +160,14 @@ function fakeRepos(spaceStatus: SpaceStatus = 'PUBLISHED') {
         authorId: c.authorId,
         kind: c.kind,
         publishedAt: c.publishedAt,
-        title: c.latestRevision.title,
         body: c.latestRevision.body,
         attachmentCount: attachmentRecordsFor(c.id).length,
+        imageObjectKey: attachmentRecordsFor(c.id).find((a) => a.kind === 'IMAGE')?.objectKey ?? null,
         reactionCount: 0,
+        likeCount: 0,
+        commentCount: 0,
+        likedByMe: false,
+        bookmarkedByMe: false,
       }));
     },
     async getSpaceHealthStatus() {
@@ -402,7 +408,6 @@ describe('GET /v1/cards/:cardId', () => {
       spaceId: SPACE,
       authorId: USER_1,
       kind: 'AWARENESS',
-      title: deriveTitle(undefined, 'x'),
       body: 'x',
       inferredKind: inferCardKind('x').inferredKind,
       confidence: inferCardKind('x').confidence,
@@ -424,7 +429,6 @@ describe('PATCH /v1/cards/:cardId', () => {
       spaceId: repos.SPACE,
       authorId: USER_1,
       kind: 'AWARENESS',
-      title: 'نسخهٔ اول',
       body: 'نسخهٔ اول',
       inferredKind: 'AWARENESS',
       confidence: 0.2,

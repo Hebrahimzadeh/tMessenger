@@ -169,7 +169,7 @@ export function SpacePage({ idOrSlug }: { idOrSlug: string }) {
       <div className="flex-1 overflow-y-auto">
         {!query && <PinnedCards spaceId={space.id} />}
         <div className="p-3">
-          <SpaceFeed spaceId={space.id} cardHints={space.definition.cardHints} query={query} />
+          <SpaceFeed spaceId={space.id} query={query} />
         </div>
       </div>
 

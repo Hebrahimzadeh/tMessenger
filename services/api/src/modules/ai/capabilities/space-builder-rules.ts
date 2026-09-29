@@ -1,4 +1,4 @@
-import { spaceBuildOutputSchema, type SpaceBuildOutput } from '@taavon/contracts';
+import { spaceBuildOutputSchema, type SpaceBuildOutput, type SpaceOpeningCard } from '@taavon/contracts';
 
 /**
  * A whole space from one prompt, with no model.
@@ -14,6 +14,13 @@ import { spaceBuildOutputSchema, type SpaceBuildOutput } from '@taavon/contracts
  * یادگیرنده"), and says only what is true of every space here: that people
  * post cards and coordinate underneath them. It never invents a number, a
  * place, an organisation or a promise.
+ *
+ * That last rule is what shapes its three opening cards. They are real cards
+ * published under the creator's name, so every one of them is something the
+ * creator is actually doing by opening the space - an invitation, and two
+ * questions - and never a claim about what they own, did or promised. The
+ * model, which has the person's own prompt to work from, can be specific
+ * where these cannot.
  */
 
 interface Theme {
@@ -24,7 +31,8 @@ interface Theme {
   purpose: string;
   primary: [{ title: string; description: string }, { title: string; description: string }];
   firstMethod: string;
-  hint: { title: string; description: string };
+  /** Exactly three, because every space opens with exactly three cards. */
+  openingCards: readonly [SpaceOpeningCard, SpaceOpeningCard, SpaceOpeningCard];
 }
 
 /** Most specific first: a lending with a class attached is still a lending. */
@@ -38,7 +46,21 @@ const THEMES: readonly Theme[] = [
       { title: 'نیازمند وسیله', description: 'وسیله‌ای را برای مدت کوتاه امانت می‌گیرد و سالم برمی‌گرداند.' },
     ],
     firstMethod: 'ثبت کارت وسیلهٔ قابل امانت',
-    hint: { title: 'وسیلهٔ آماده برای امانت', description: 'نام وسیله، مدت امانت و زمان مناسب تحویل را بنویسید.' },
+    openingCards: [
+      {
+        caption:
+          'این بستر را برای امانت‌دادن و امانت‌گرفتن وسایلی ساختم که کم استفاده می‌شوند و بیشتر وقت‌ها بی‌کار می‌مانند. هر کس چنین وسیله‌ای دارد می‌تواند همین‌جا کارتش را ثبت کند.',
+        comment: 'اگر وسیله‌ای دارید که حاضرید امانت بدهید، همین زیر بنویسید چه چیزی است و چند روز در دسترس است.',
+      },
+      {
+        caption: 'چه وسیله‌ای دارید که ماه‌هاست به آن دست نزده‌اید؟ همان وسیله ممکن است کار کسی را راه بیندازد.',
+        comment: 'نام وسیله و مدتی که می‌توانید امانت بدهید را بنویسید.',
+      },
+      {
+        caption: 'به چه وسیله‌ای نیاز دارید که خریدنش برای یک‌بار استفاده به‌صرفه نیست؟',
+        comment: 'نام وسیله و مدتی که لازمش دارید را بنویسید تا ببینیم چه کسی همان را دارد.',
+      },
+    ],
   },
   {
     terms: ['آموزش', 'کلاس', 'درس', 'تدریس', 'مربی', 'یادگیری', 'کارگاه', 'مهارت'],
@@ -49,7 +71,21 @@ const THEMES: readonly Theme[] = [
       { title: 'یادگیرنده', description: 'برای آموختن یک دانش یا مهارت همراه می‌شود.' },
     ],
     firstMethod: 'ثبت کارت پیشنهاد آموزش یا درخواست یادگیری',
-    hint: { title: 'پیشنهاد یک جلسهٔ آموزشی', description: 'موضوع، سطح مناسب و زمان پیشنهادی را بنویسید.' },
+    openingCards: [
+      {
+        caption:
+          'این بستر را ساختم تا هر کس چیزی می‌داند بتواند آن را به دیگران یاد بدهد، و هر کس چیزی می‌خواهد بیاموزد بداند از کی بپرسد.',
+        comment: 'اگر مهارتی دارید که می‌توانید آموزش بدهید، همین زیر نامش را بنویسید.',
+      },
+      {
+        caption: 'چه مهارتی دارید که می‌توانید در یک جلسهٔ کوتاه به دیگران یاد بدهید؟',
+        comment: 'موضوع و سطح مناسب را بنویسید تا علاقه‌مندها خودشان را معرفی کنند.',
+      },
+      {
+        caption: 'چه چیزی هست که مدت‌ها می‌خواستید یاد بگیرید و نشده؟',
+        comment: 'موضوع و اینکه تا کجا پیش رفته‌اید را بنویسید تا ببینیم چه کسی می‌تواند همراهی کند.',
+      },
+    ],
   },
   {
     terms: ['تعمیر', 'خدمات', 'خدمت', 'نظافت', 'باغبانی', 'جابه‌جایی'],
@@ -60,7 +96,21 @@ const THEMES: readonly Theme[] = [
       { title: 'متقاضی خدمت', description: 'برای انجام کاری که به آن نیاز دارد کمک می‌خواهد.' },
     ],
     firstMethod: 'ثبت کارت خدمت یا درخواست خدمت',
-    hint: { title: 'خدمتی که می‌توانم انجام دهم', description: 'نوع کار، زمان‌های در دسترس و محدوده را بنویسید.' },
+    openingCards: [
+      {
+        caption:
+          'این بستر را ساختم تا کارهای کوچکی که از دست هرکدام از ما برمی‌آید به کسی برسد که به همان کار نیاز دارد.',
+        comment: 'اگر کاری از دستتان برمی‌آید، همین زیر بنویسید چه کاری است.',
+      },
+      {
+        caption: 'چه کاری هست که برای شما ساده است و برای کسی دیگر دشوار؟',
+        comment: 'نوع کار و زمان‌هایی که در دسترس هستید را بنویسید.',
+      },
+      {
+        caption: 'چه کاری مانده روی دستتان که تنهایی از پیش نمی‌رود؟',
+        comment: 'بنویسید چه کاری است و تا چه زمانی فرصت دارد.',
+      },
+    ],
   },
   {
     terms: ['کمک', 'یاری', 'نیازمند', 'خیریه', 'ارزاق', 'جهیزیه', 'بیمار', 'سالمند'],
@@ -71,7 +121,21 @@ const THEMES: readonly Theme[] = [
       { title: 'نیازمند یاری', description: 'نیازی را که دارد با حفظ حریم و کرامتش مطرح می‌کند.' },
     ],
     firstMethod: 'ثبت کارت پیشنهاد یاری یا اعلام نیاز',
-    hint: { title: 'پیشنهاد یاری', description: 'نوع کمکی که از شما برمی‌آید و زمان آن را بنویسید؛ اطلاعات خصوصی افراد را ننویسید.' },
+    openingCards: [
+      {
+        caption:
+          'این بستر را ساختم تا یاری‌ای که از دست ما برمی‌آید به کسی برسد که به آن نیاز دارد، بی‌آنکه آبروی کسی در میان بیاید.',
+        comment: 'اگر کاری از دستتان برمی‌آید همین زیر بنویسید؛ نام و مشخصات هیچ‌کس را ننویسید.',
+      },
+      {
+        caption: 'چه یاری‌ای از دست شما برمی‌آید؟ از یک ساعت وقت تا یک مهارت، هرچه باشد به کار می‌آید.',
+        comment: 'نوع یاری و زمانی که در دسترس هستید را بنویسید.',
+      },
+      {
+        caption: 'اگر نیازی دارید، می‌توانید همین‌جا مطرحش کنید؛ لازم نیست نام یا جزئیات خصوصی کسی نوشته شود.',
+        comment: 'تنها همان‌قدر بنویسید که برای کمک‌کردن لازم است.',
+      },
+    ],
   },
   {
     terms: ['بچه', 'کودک', 'نوجوان', 'خانواده'],
@@ -82,7 +146,20 @@ const THEMES: readonly Theme[] = [
       { title: 'خانوادهٔ همراه', description: 'با فرزندانش در برنامه شرکت می‌کند یا در برگزاری کمک می‌کند.' },
     ],
     firstMethod: 'ثبت کارت پیشنهاد برنامه',
-    hint: { title: 'پیشنهاد یک برنامه', description: 'نوع فعالیت، گروه سنی مناسب و زمان پیشنهادی را بنویسید.' },
+    openingCards: [
+      {
+        caption: 'این بستر را ساختم تا برنامه‌های سالم برای کودکان و نوجوانان با هم هماهنگ شود.',
+        comment: 'اگر فکری برای یک برنامه دارید، همین زیر بنویسید.',
+      },
+      {
+        caption: 'چه برنامه‌ای برای بچه‌ها در ذهن دارید که با همراهی چند خانواده شدنی است؟',
+        comment: 'نوع فعالیت و گروه سنی مناسب را بنویسید.',
+      },
+      {
+        caption: 'بچه‌های شما به چه فعالیتی علاقه دارند که کم برگزار می‌شود؟',
+        comment: 'گروه سنی و روزهایی که برایتان مناسب است را بنویسید.',
+      },
+    ],
   },
 ];
 
@@ -95,7 +172,20 @@ const DEFAULT_THEME: Theme = {
     { title: 'همراه', description: 'در انجام کار مشارکت می‌کند و سهمی بر عهده می‌گیرد.' },
   ],
   firstMethod: 'ثبت کارت پیشنهاد یا اعلام آمادگی',
-  hint: { title: 'اعلام آمادگی برای همکاری', description: 'بنویسید چه کاری از شما برمی‌آید و چه زمانی در دسترس هستید.' },
+  openingCards: [
+    {
+      caption: 'این بستر را ساختم تا کاری که تنهایی از پیش نمی‌رود با همکاری چند نفر شکل بگیرد.',
+      comment: 'اگر همراه می‌شوید، همین زیر بنویسید چه سهمی می‌توانید برعهده بگیرید.',
+    },
+    {
+      caption: 'چه کاری از دست شما برمی‌آید که به این کار مشترک کمک می‌کند؟',
+      comment: 'توانتان و زمان‌هایی که در دسترس هستید را بنویسید.',
+    },
+    {
+      caption: 'چه چیزی برای شروع لازم است که هنوز نداریم؟',
+      comment: 'بنویسید چه چیزی لازم است و برای کدام مرحله.',
+    },
+  ],
 };
 
 const COORDINATOR = {
@@ -211,7 +301,7 @@ export function buildSpaceFromRules(prompt: string): SpaceBuildOutput {
       { ...theme.primary[1], isPrimary: true },
       COORDINATOR,
     ],
-    cardHints: [theme.hint],
+    openingCards: theme.openingCards,
     reviewNote: '',
   });
 }

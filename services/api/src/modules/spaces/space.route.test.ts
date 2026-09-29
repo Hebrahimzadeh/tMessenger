@@ -55,7 +55,6 @@ function fakeSpaceRepo(): SpaceRepository {
           purpose: '',
           audience: null,
           participationMethods: [],
-          cardHints: null,
           policyVersion,
           gateVerdict: null,
           gateReason: null,
@@ -116,7 +115,6 @@ function fakeSpaceRepo(): SpaceRepository {
       versions.push({
         ...rest,
         audience: rest.audience ?? null,
-        cardHints: rest.cardHints ?? null,
         versionNumber,
         gateVerdict: null,
         gateReason: null,
@@ -152,7 +150,6 @@ function fakeSpaceRepo(): SpaceRepository {
           purpose: input.purpose,
           audience: input.audience ?? null,
           participationMethods: input.participationMethods,
-          cardHints: input.cardHints,
           policyVersion: input.policyVersion,
           gateVerdict: input.verdict,
           gateReason: input.reason,
@@ -182,7 +179,6 @@ function fakeSpaceRepo(): SpaceRepository {
       versions.push({
         ...rest,
         audience: rest.audience ?? null,
-        cardHints: rest.cardHints ?? null,
         versionNumber,
         gateVerdict: 'ALLOW',
         gateReason,
@@ -517,32 +513,8 @@ describe('space role join/leave', () => {
   });
 });
 
-describe('cardHints validation ("template کارت نمونه فقط با isExample=true و برچسب ثابت")', () => {
-  it('rejects a cardHints entry missing isExample/the fixed label - the schema itself, not application logic, enforces this', async () => {
-    const app = buildApp(fakeSpaceRepo());
-    app.setErrorHandler((err, request, reply) => {
-      reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: 'x', correlationId: String(request.id), details: [] } });
-    });
-    const created = await app.inject({ method: 'POST', url: '/v1/spaces', cookies: sessionCookieFor(USER_1), payload: { title: 'x' } });
-
-    const response = await app.inject({
-      method: 'PATCH',
-      url: `/v1/spaces/${created.json().id}`,
-      cookies: sessionCookieFor(USER_1),
-      payload: {
-        title: 'x',
-        purpose: VALID_PURPOSE,
-        participationMethods: ['حضوری'],
-        roles: TWO_PRIMARY_ROLES,
-        policyVersion: 1,
-        cardHints: [{ isExample: false, label: 'چیز دیگر', title: 'یک کارت جعلی' }],
-      },
-    });
-    expect(response.statusCode).toBe(400);
-    await app.close();
-  });
-
-  it('accepts a correctly-shaped example card hint', async () => {
+describe("a space's definition carries no card templates", () => {
+  it('ignores a cardHints field nobody may send any more, and returns a definition without one', async () => {
     const app = buildApp(fakeSpaceRepo());
     const created = await app.inject({ method: 'POST', url: '/v1/spaces', cookies: sessionCookieFor(USER_1), payload: { title: 'x' } });
 
@@ -559,8 +531,11 @@ describe('cardHints validation ("template کارت نمونه فقط با isExam
         cardHints: [{ isExample: true, label: 'نمونه', title: 'یک کارت نمونه' }],
       },
     });
+
     expect(response.statusCode).toBe(200);
-    expect(response.json().definition.cardHints).toEqual([{ isExample: true, label: 'نمونه', title: 'یک کارت نمونه' }]);
+    // Nothing card-shaped survives on a definition: a space's cards are real
+    // cards, and the three it opens with are created as such.
+    expect(response.json().definition).not.toHaveProperty('cardHints');
     await app.close();
   });
 });
